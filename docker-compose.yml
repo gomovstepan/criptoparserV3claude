@@ -128,6 +128,18 @@ services:
     restart: unless-stopped
     networks: [arbitrage-net]
 
+  frontend:
+    build:
+      context: ./frontend
+    container_name: arb-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [arbitrage-net]
+
 volumes:
   tsdb_data:
   redis_data:
