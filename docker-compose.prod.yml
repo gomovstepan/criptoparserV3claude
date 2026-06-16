@@ -55,6 +55,12 @@ services:
       resources:
         limits: { cpus: "1.0", memory: 512m }
 
+  frontend:
+    <<: *prod
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256m }
+
   # ── Мониторинг ────────────────────────────────────────────────────────────
   prometheus:
     image: prom/prometheus:latest

@@ -50,7 +50,8 @@ INSERT INTO settings (key, value, description) VALUES
 ('kill_switch', 'false', 'Emergency stop flag'),
 ('notification_spread_threshold', '0.50', 'Min spread % for Telegram alert'),
 ('notification_trade_min_pnl', '5.00', 'Min |net P&L| USDT to alert a trade in Telegram'),
-('daily_loss_limit_pct', '5.00', 'Daily loss limit % - stop trading')
+('daily_loss_limit_pct', '5.00', 'Daily loss limit % - stop trading'),
+('estimated_trade_notional', '1000.00', 'Estimated trade notional USD for spread fee calculation')
 ON CONFLICT (key) DO NOTHING;
 
 

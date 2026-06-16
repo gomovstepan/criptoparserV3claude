@@ -49,6 +49,7 @@ _state: dict = {
     "dedup": None,
     "prices": {},                # symbol -> exchange -> {"bid":.., "ask":..}
     "min_spread": 0.30,
+    "estimated_notional": 1000.0,
     "spreads_calculated": 0,
     "opportunities_found": 0,
     "started_at": 0.0,
@@ -67,7 +68,7 @@ async def _ensure_group(r: redis.Redis) -> None:
 
 
 async def _refresh_min_spread() -> None:
-    """Периодически перечитывать min_spread_pct из таблицы settings."""
+    """Периодически перечитывать min_spread_pct и estimated_trade_notional из таблицы settings."""
     while _state["running"]:
         try:
             row = await _state["pool"].fetchval(
@@ -75,8 +76,13 @@ async def _refresh_min_spread() -> None:
             )
             if row is not None:
                 _state["min_spread"] = float(str(row).strip('"'))
+            notional_row = await _state["pool"].fetchval(
+                "SELECT value FROM settings WHERE key = 'estimated_trade_notional'"
+            )
+            if notional_row is not None:
+                _state["estimated_notional"] = float(str(notional_row).strip('"'))
         except Exception as err:  # noqa: BLE001
-            log.warning("min_spread_refresh_failed", error=str(err))
+            log.warning("settings_refresh_failed", error=str(err))
         await asyncio.sleep(MIN_SPREAD_REFRESH_SEC)
 
 
@@ -126,7 +132,7 @@ async def _scan_loop() -> None:
                 book = prices[sym]
                 n = len(book)
                 _state["spreads_calculated"] += n * (n - 1)
-                for opp in calculate_spreads(sym, book, _state["min_spread"]):
+                for opp in calculate_spreads(sym, book, _state["min_spread"], _state["estimated_notional"]):
                     if await dedup.is_new(opp):
                         found.append(opp)
 

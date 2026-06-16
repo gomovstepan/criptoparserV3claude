@@ -3,7 +3,7 @@ import { useAuthStore } from '../store/authStore'
 import { useDashboardStore } from '../store/dashboardStore'
 import { normalizeOpportunity, normalizeTrade } from '../lib/normalize'
 
-const WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8000/ws'
+const WS_URL = import.meta.env.VITE_WS_URL || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`
 const MAX_BACKOFF_MS = 30000
 const PING_INTERVAL_MS = 20000 // как часто шлём ping
 const LIVENESS_TIMEOUT_MS = 45000 // нет активности дольше — соединение мёртвое

@@ -16,6 +16,7 @@ def calculate_spreads(
     symbol: str,
     prices: dict[str, dict[str, float]],
     min_spread_pct: float,
+    estimated_notional_usd: float = 1000.0,
 ) -> list[Opportunity]:
     """Вернуть opportunities по символу, где gross_spread >= min_spread_pct.
 
@@ -43,7 +44,7 @@ def calculate_spreads(
             buy_fee = EXCHANGES[buy_ex].taker_fee_pct
             sell_fee = EXCHANGES[sell_ex].taker_fee_pct
             withdrawal_usd = EXCHANGES[sell_ex].withdrawal_usdt
-            withdrawal_pct = withdrawal_usd / buy_price * 100
+            withdrawal_pct = withdrawal_usd / estimated_notional_usd * 100
             net = gross - buy_fee - sell_fee - withdrawal_pct
 
             opportunities.append(Opportunity(

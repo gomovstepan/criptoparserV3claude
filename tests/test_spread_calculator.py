@@ -37,12 +37,13 @@ class TestSpreadCalculator(unittest.TestCase):
         self.assertEqual(opps, [])
 
     def test_withdrawal_fee_reduces_net(self):
-        # sell на bybit (withdrawal_usdt=1.0) — net должен просесть на ~1% (1.0/100*100)
+        # sell на bybit (withdrawal_usdt=1.0) — net должен просесть
         prices = {
             "binance": {"bid": 100.0, "ask": 100.0},
             "bybit": {"bid": 102.0, "ask": 102.0},
         }
-        opps = calculate_spreads("BTC/USDT", prices, min_spread_pct=1.0)
+        # notional=100 USD → withdrawal_pct = 1.0/100*100 = 1.0%
+        opps = calculate_spreads("BTC/USDT", prices, min_spread_pct=0.1, estimated_notional_usd=100.0)
         o = next(o for o in opps if o.sell_exchange == "bybit")
         self.assertAlmostEqual(o.gross_spread_pct, 2.0, places=4)
         # net = 2.0 - 0.1 - 0.1 - 1.0 = 0.8

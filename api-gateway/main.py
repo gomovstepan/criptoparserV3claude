@@ -37,6 +37,8 @@ _state: dict = {"redis": None, "tasks": []}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if not settings.jwt_secret or "change_me" in settings.jwt_secret:
+        raise RuntimeError("JWT_SECRET is not configured — set a secure value in .env")
     pool = await get_db_pool()
     await ensure_default_user(pool)
     _state["redis"] = await get_redis()

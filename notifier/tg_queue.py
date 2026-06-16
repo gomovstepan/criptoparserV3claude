@@ -18,7 +18,9 @@ import structlog
 log = structlog.get_logger()
 
 QUEUE_KEY = "telegram_queue"
+DEAD_LETTER_KEY = "telegram_dead_letter"
 MAX_PER_SEC = 20
+MAX_RETRIES = 3
 MIN_INTERVAL = 1.0 / MAX_PER_SEC  # 50 ms между отправками
 
 
@@ -52,13 +54,24 @@ class TelegramQueue:
                     continue
                 _, payload = item
                 data = json.loads(payload)
-                await self._bot.send_message(data["chat_id"], data["text"])
-                self.messages_sent += 1
-                await asyncio.sleep(MIN_INTERVAL)  # rate limit
+                retries = data.get("_retries", 0)
+                try:
+                    await self._bot.send_message(data["chat_id"], data["text"])
+                    self.messages_sent += 1
+                except asyncio.CancelledError:
+                    raise
+                except Exception as err:  # noqa: BLE001
+                    if retries < MAX_RETRIES:
+                        data["_retries"] = retries + 1
+                        await self._redis.lpush(QUEUE_KEY, json.dumps(data))
+                    else:
+                        await self._redis.lpush(DEAD_LETTER_KEY, payload)
+                        log.error("telegram_dead_letter", error=str(err), msg_id=data.get("id"))
+                await asyncio.sleep(MIN_INTERVAL)
             except asyncio.CancelledError:
                 raise
-            except Exception as err:  # noqa: BLE001 — не падать из-за одной ошибки отправки
-                log.error("telegram_send_error", error=str(err))
+            except Exception as err:  # noqa: BLE001
+                log.error("telegram_queue_error", error=str(err))
                 await asyncio.sleep(1)
 
     async def stop(self) -> None:
