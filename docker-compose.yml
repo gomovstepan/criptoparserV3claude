@@ -12,8 +12,6 @@ services:
   timescaledb:
     image: timescale/timescaledb:latest-pg18
     container_name: arb-timescaledb
-    ports:
-      - "5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -32,13 +30,11 @@ services:
   redis:
     image: redis:7-alpine
     container_name: arb-redis
-    ports:
-      - "6379:6379"
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -48,8 +44,6 @@ services:
   collector:
     build: ./collector
     container_name: arb-collector
-    ports:
-      - "8001:8001"
     env_file: .env
     volumes:
       - ./shared:/app/shared:ro
@@ -67,8 +61,6 @@ services:
   scanner:
     build: ./scanner
     container_name: arb-scanner
-    ports:
-      - "8002:8002"
     env_file: .env
     volumes:
       - ./shared:/app/shared:ro
@@ -86,8 +78,6 @@ services:
   executor:
     build: ./executor
     container_name: arb-executor
-    ports:
-      - "8003:8003"
     env_file: .env
     volumes:
       - ./shared:/app/shared:ro
@@ -105,8 +95,6 @@ services:
   notifier:
     build: ./notifier
     container_name: arb-notifier
-    ports:
-      - "8004:8004"
     env_file: .env
     volumes:
       - ./shared:/app/shared:ro

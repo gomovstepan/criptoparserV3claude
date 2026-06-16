@@ -93,7 +93,6 @@ async def _persist(results: list[ExecutionResult]) -> None:
     for res in results:
         t = res.trade
         trade_records.append(_trade_record(t))
-        await r.xadd(TRADES_STREAM, t.to_redis(), maxlen=TRADES_MAXLEN, approximate=True)
         executed = datetime.fromtimestamp(t.executed_at / 1000, tz=timezone.utc)
         for exchange, new_balance, change in res.balance_updates:
             balance_records.append(
@@ -103,6 +102,8 @@ async def _persist(results: list[ExecutionResult]) -> None:
         await pool.copy_records_to_table("trades", records=trade_records, columns=_TRADE_COLUMNS)
     if balance_records:
         await pool.copy_records_to_table("balance", records=balance_records, columns=_BALANCE_COLUMNS)
+    for res in results:
+        await r.xadd(TRADES_STREAM, res.trade.to_redis(), maxlen=TRADES_MAXLEN, approximate=True)
 
 
 async def _consume_loop() -> None:

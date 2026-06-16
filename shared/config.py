@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     notifier_port: int = 8004
 
     # ── Auth ──
-    jwt_secret: str = "change_me"
+    jwt_secret: str = ""
     jwt_expiry_hours: int = 24
     cors_origins: str = "http://localhost:5173"
 
