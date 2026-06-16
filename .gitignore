@@ -1,0 +1,33 @@
+# Секреты / окружение
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Node / Frontend
+node_modules/
+dist/
+.vite/
+*.local
+
+# Docker volumes (на случай локального bind)
+tsdb_data/
+prometheus_data/
+grafana_data/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Логи
+*.log

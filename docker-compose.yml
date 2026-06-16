@@ -1,0 +1,150 @@
+# Крипто-арбитражная система — оркестрация инфраструктуры и микросервисов.
+# Сеть arbitrage-net; shared/ монтируется в каждый backend как read-only пакет.
+
+x-healthcheck-defaults: &svc-healthcheck
+  interval: 10s
+  timeout: 5s
+  retries: 5
+  start_period: 20s
+
+services:
+  # ── Данные ──────────────────────────────────────────────────────────────
+  timescaledb:
+    image: timescale/timescaledb:latest-pg18
+    container_name: arb-timescaledb
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      # PostgreSQL 18+ хранит данные в подкаталоге версии; том монтируется в /var/lib/postgresql
+      - tsdb_data:/var/lib/postgresql
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [arbitrage-net]
+
+  redis:
+    image: redis:7-alpine
+    container_name: arb-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks: [arbitrage-net]
+
+  # ── Микросервисы ────────────────────────────────────────────────────────
+  collector:
+    build: ./collector
+    container_name: arb-collector
+    ports:
+      - "8001:8001"
+    env_file: .env
+    volumes:
+      - ./shared:/app/shared:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    healthcheck:
+      <<: *svc-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+    restart: unless-stopped
+    networks: [arbitrage-net]
+
+  scanner:
+    build: ./scanner
+    container_name: arb-scanner
+    ports:
+      - "8002:8002"
+    env_file: .env
+    volumes:
+      - ./shared:/app/shared:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    healthcheck:
+      <<: *svc-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+    restart: unless-stopped
+    networks: [arbitrage-net]
+
+  executor:
+    build: ./executor
+    container_name: arb-executor
+    ports:
+      - "8003:8003"
+    env_file: .env
+    volumes:
+      - ./shared:/app/shared:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    healthcheck:
+      <<: *svc-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
+    restart: unless-stopped
+    networks: [arbitrage-net]
+
+  notifier:
+    build: ./notifier
+    container_name: arb-notifier
+    ports:
+      - "8004:8004"
+    env_file: .env
+    volumes:
+      - ./shared:/app/shared:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    healthcheck:
+      <<: *svc-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health')"]
+    restart: unless-stopped
+    networks: [arbitrage-net]
+
+  api-gateway:
+    build: ./api-gateway
+    container_name: arb-api-gateway
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - ./shared:/app/shared:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    healthcheck:
+      <<: *svc-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+    restart: unless-stopped
+    networks: [arbitrage-net]
+
+volumes:
+  tsdb_data:
+  redis_data:
+
+networks:
+  arbitrage-net:
+    name: arbitrage-net
+    driver: bridge

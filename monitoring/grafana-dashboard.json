@@ -1,0 +1,71 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 0,
+  "schemaVersion": 39,
+  "tags": ["criptoparser"],
+  "title": "CriptoParser V3 — Overview",
+  "uid": "criptoparser-overview",
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "10s",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "WS clients (gateway)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }] } }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "ws_clients_active", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Trades executed (total)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "blue", "value": null }] } }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "trades_executed_total", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Opportunities found (total)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }] } }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "opportunities_found_total", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Services up",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 5 }] } }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "count(up{job=\"arbitrage-services\"} == 1)", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "HTTP requests/sec (gateway)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "sum(rate(http_requests_total[5m]))", "legendFormat": "req/s", "datasource": { "type": "prometheus", "uid": "prometheus" } }]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Scanner: spreads & opportunities",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "spreads_scanned_total", "legendFormat": "spreads scanned", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "B", "expr": "opportunities_found_total", "legendFormat": "opportunities", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    }
+  ]
+}

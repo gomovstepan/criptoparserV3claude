@@ -1,0 +1,22 @@
+# Prometheus — сбор метрик микросервисов (Фаза 15).
+# Сервисы отдают /metrics (prometheus_client). Скрейп по именам сервисов в сети arbitrage-net.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: arbitrage-services
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - 'api-gateway:8000'
+          - 'collector:8001'
+          - 'scanner:8002'
+          - 'executor:8003'
+          - 'notifier:8004'
+        labels:
+          stack: criptoparser

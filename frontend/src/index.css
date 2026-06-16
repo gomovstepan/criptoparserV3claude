@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Цветовые токены как RGB-каналы (для tailwind `rgb(var() / <alpha>)`).
+   :root — тёмная тема по умолчанию; html.light переопределяет на светлую. */
+:root {
+  color-scheme: dark;
+  --c-page: 10 10 20;
+  --c-surface: 18 18 31;
+  --c-surface2: 26 26 46;
+  --c-edge: 37 37 64;
+  --c-accent: 0 212 170;
+  --c-success: 34 197 94;
+  --c-danger: 239 68 68;
+  --c-warning: 245 158 11;
+  --c-ink: 241 245 249;
+  --c-muted: 148 163 184;
+}
+
+html.light {
+  color-scheme: light;
+  --c-page: 244 246 249;
+  --c-surface: 255 255 255;
+  --c-surface2: 241 244 248;
+  --c-edge: 222 227 234;
+  --c-accent: 0 160 130;
+  --c-success: 22 163 74;
+  --c-danger: 220 38 38;
+  --c-warning: 217 119 6;
+  --c-ink: 15 23 42;
+  --c-muted: 100 116 139;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: rgb(var(--c-page));
+  color: rgb(var(--c-ink));
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Тонкий скроллбар, подстраивается под тему */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--c-edge));
+  border-radius: 4px;
+}
