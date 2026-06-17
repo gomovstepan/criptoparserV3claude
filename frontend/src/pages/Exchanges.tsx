@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import api from '../lib/api'
 import type { ExchangeConfig, ExchangeConnStatus } from '../types'
+import { GLOSSARY } from '../lib/glossary'
 import Panel from '../components/Panel'
 import Toggle from '../components/Toggle'
+import Tooltip from '../components/Tooltip'
 import { cn } from '../lib/utils'
 
 interface StatusRow {
@@ -92,13 +94,13 @@ export default function Exchanges() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-edge text-left text-xs uppercase tracking-wide text-muted">
-                  <th className="px-3 py-2 font-medium">Биржа</th>
-                  <th className="px-3 py-2 font-medium">Статус</th>
-                  <th className="px-3 py-2 text-right font-medium">Maker fee</th>
-                  <th className="px-3 py-2 text-right font-medium">Taker fee</th>
-                  <th className="px-3 py-2 text-right font-medium">Вывод USDT</th>
-                  <th className="px-3 py-2 text-right font-medium">Rate limit</th>
-                  <th className="px-3 py-2 text-center font-medium">Активна</th>
+                  <th className="px-3 py-2 font-medium"><Tooltip text={GLOSSARY['Биржа']}>Биржа</Tooltip></th>
+                  <th className="px-3 py-2 font-medium"><Tooltip text={GLOSSARY['Статус']}>Статус</Tooltip></th>
+                  <th className="px-3 py-2 text-right font-medium"><Tooltip text={GLOSSARY['Maker fee']}>Maker fee</Tooltip></th>
+                  <th className="px-3 py-2 text-right font-medium"><Tooltip text={GLOSSARY['Taker fee']}>Taker fee</Tooltip></th>
+                  <th className="px-3 py-2 text-right font-medium"><Tooltip text={GLOSSARY['Вывод USDT']}>Вывод USDT</Tooltip></th>
+                  <th className="px-3 py-2 text-right font-medium"><Tooltip text={GLOSSARY['Rate limit']}>Rate limit</Tooltip></th>
+                  <th className="px-3 py-2 text-center font-medium"><Tooltip text={GLOSSARY['Активна']}>Активна</Tooltip></th>
                 </tr>
               </thead>
               <tbody>

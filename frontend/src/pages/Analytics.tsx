@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Activity, Award, Percent, TrendingDown, TrendingUp, Wallet } from 'lucide-react'
 import api from '../lib/api'
 import type { AnalyticsSummary } from '../types'
+import { GLOSSARY } from '../lib/glossary'
 import KPICard from '../components/KPICard'
 import Panel from '../components/Panel'
 import DateRangePicker from '../components/DateRangePicker'
@@ -30,22 +31,24 @@ export default function Analytics() {
       </div>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
-        <KPICard title="Total Trades" value={data ? data.total_trades.toLocaleString() : '…'} icon={Activity} />
-        <KPICard title="Win Rate" value={data ? `${data.win_rate.toFixed(1)}%` : '…'} icon={Percent} />
+        <KPICard title="Total Trades" value={data ? data.total_trades.toLocaleString() : '…'} icon={Activity} tooltip={GLOSSARY['Total Trades']} />
+        <KPICard title="Win Rate" value={data ? `${data.win_rate.toFixed(1)}%` : '…'} icon={Percent} tooltip={GLOSSARY['Win Rate']} />
         <KPICard
           title="Net P&L"
           value={data ? `$${data.total_net_pnl.toFixed(2)}` : '…'}
           icon={Wallet}
           accent={data ? (data.total_net_pnl >= 0 ? 'pos' : 'neg') : 'default'}
+          tooltip={GLOSSARY['Net P&L (analytics)']}
         />
         <KPICard
           title="Gross P&L"
           value={data ? `$${data.total_gross_pnl.toFixed(2)}` : '…'}
           icon={TrendingUp}
           accent={data ? (data.total_gross_pnl >= 0 ? 'pos' : 'neg') : 'default'}
+          tooltip={GLOSSARY['Gross P&L (analytics)']}
         />
-        <KPICard title="Best Trade" value={data ? `$${data.best_trade.toFixed(2)}` : '…'} icon={Award} accent="pos" />
-        <KPICard title="Worst Trade" value={data ? `$${data.worst_trade.toFixed(2)}` : '…'} icon={TrendingDown} accent="neg" />
+        <KPICard title="Best Trade" value={data ? `$${data.best_trade.toFixed(2)}` : '…'} icon={Award} accent="pos" tooltip={GLOSSARY['Best Trade']} />
+        <KPICard title="Worst Trade" value={data ? `$${data.worst_trade.toFixed(2)}` : '…'} icon={TrendingDown} accent="neg" tooltip={GLOSSARY['Worst Trade']} />
       </div>
 
       <Panel title="Cumulative net P&L">

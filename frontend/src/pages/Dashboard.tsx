@@ -3,12 +3,14 @@ import { Wallet, TrendingUp, ArrowLeftRight, Gauge, Wifi, WifiOff } from 'lucide
 import api from '../lib/api'
 import { useDashboardStore } from '../store/dashboardStore'
 import type { Stats, ExchangeStatus, PnLPoint } from '../types'
+import { GLOSSARY } from '../lib/glossary'
 import KPICard from '../components/KPICard'
 import ExchangeStatusCard from '../components/ExchangeStatusCard'
 import PnLChart from '../components/PnLChart'
 import OpportunitiesTable from '../components/OpportunitiesTable'
 import RecentTradesTable from '../components/RecentTradesTable'
 import Panel from '../components/Panel'
+import Tooltip from '../components/Tooltip'
 import { SkeletonCards, SkeletonTable } from '../components/LoadingSkeleton'
 import { cn } from '../lib/utils'
 
@@ -69,7 +71,7 @@ export default function Dashboard() {
           )}
         >
           {wsStatus === 'connected' ? <Wifi size={14} /> : <WifiOff size={14} />}
-          WS: {wsStatus}
+          <Tooltip text={GLOSSARY['WS Status']}>WS: {wsStatus}</Tooltip>
         </div>
       </div>
 
@@ -82,27 +84,31 @@ export default function Dashboard() {
             value={stats ? `$${stats.total_pnl.toFixed(2)}` : '…'}
             icon={Wallet}
             accent={stats ? (stats.total_pnl >= 0 ? 'pos' : 'neg') : 'default'}
+            tooltip={GLOSSARY['Total P&L']}
           />
           <KPICard
             title="Active Opportunities"
             value={stats ? String(stats.active_opportunities) : '…'}
             icon={TrendingUp}
+            tooltip={GLOSSARY['Active Opportunities']}
           />
           <KPICard
             title="Today's Trades"
             value={stats ? String(stats.trades_today) : '…'}
             icon={ArrowLeftRight}
+            tooltip={GLOSSARY["Today's Trades"]}
           />
           <KPICard
             title="Best Spread"
             value={stats ? `${stats.best_spread_pct.toFixed(3)}%` : '…'}
             icon={Gauge}
             accent="pos"
+            tooltip={GLOSSARY['Best Spread']}
           />
         </div>
       )}
 
-      <Panel title="Exchange Status">
+      <Panel title="Exchange Status" titleTooltip={GLOSSARY['Exchange Status']}>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
           {exStatus.map((ex) => (
             <ExchangeStatusCard
@@ -115,7 +121,7 @@ export default function Dashboard() {
         </div>
       </Panel>
 
-      <Panel title="P&L (24h)">
+      <Panel title="P&L (24h)" titleTooltip={GLOSSARY['P&L (24h)']}>
         <PnLChart data={pnl} />
       </Panel>
 

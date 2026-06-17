@@ -1,5 +1,7 @@
 import type { Opportunity } from '../types'
 import { cn } from '../lib/utils'
+import { GLOSSARY } from '../lib/glossary'
+import Tooltip from './Tooltip'
 
 export default function OpportunitiesTable({ items }: { items: Opportunity[] }) {
   return (
@@ -7,11 +9,11 @@ export default function OpportunitiesTable({ items }: { items: Opportunity[] }) 
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-xs uppercase text-muted">
-            <th className="pb-2 pr-4 font-medium">Pair</th>
-            <th className="pb-2 pr-4 font-medium">Buy</th>
-            <th className="pb-2 pr-4 font-medium">Sell</th>
-            <th className="pb-2 pr-4 text-right font-medium">Gross %</th>
-            <th className="pb-2 text-right font-medium">Net %</th>
+            <th className="pb-2 pr-4 font-medium"><Tooltip text={GLOSSARY['Pair']}>Pair</Tooltip></th>
+            <th className="pb-2 pr-4 font-medium"><Tooltip text={GLOSSARY['Buy']}>Buy</Tooltip></th>
+            <th className="pb-2 pr-4 font-medium"><Tooltip text={GLOSSARY['Sell']}>Sell</Tooltip></th>
+            <th className="pb-2 pr-4 text-right font-medium"><Tooltip text={GLOSSARY['Gross %']}>Gross %</Tooltip></th>
+            <th className="pb-2 text-right font-medium"><Tooltip text={GLOSSARY['Net %']}>Net %</Tooltip></th>
           </tr>
         </thead>
         <tbody>
