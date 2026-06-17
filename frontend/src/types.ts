@@ -112,7 +112,16 @@ export const SETTING_FIELDS: {
 ]
 
 export const EXCHANGE_LIST = ['binance', 'bybit', 'kucoin', 'gateio', 'bitget', 'coinex', 'bingx']
-export const SYMBOLS = ['BTC/USDT', 'ETH/USDT']
+export const SYMBOLS = [
+  'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT',
+  'ADA/USDT', 'AVAX/USDT', 'DOT/USDT', 'DOGE/USDT', 'SHIB/USDT',
+  'LTC/USDT', 'LINK/USDT', 'UNI/USDT', 'NEAR/USDT', 'ARB/USDT',
+  'OP/USDT', 'APT/USDT', 'SUI/USDT', 'INJ/USDT', 'IMX/USDT',
+  'TIA/USDT', 'SEI/USDT', 'TON/USDT', 'ENA/USDT', 'WLD/USDT',
+  'ZEC/USDT', 'XMR/USDT', 'PYTH/USDT', 'BLUR/USDT', 'AEVO/USDT',
+  'PEPE/USDT', 'BONK/USDT', 'WIF/USDT', 'FLOKI/USDT', 'MEME/USDT',
+  'PENGU/USDT', 'HTX/USDT',
+]
 export const TRADE_STATUSES = ['completed', 'failed', 'pending', 'cancelled']
 
 export const RANGE_PRESETS: { label: string; days: number }[] = [

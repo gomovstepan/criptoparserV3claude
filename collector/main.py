@@ -18,9 +18,10 @@ from fastapi import FastAPI, Response
 from prometheus_client import CONTENT_TYPE_LATEST, Gauge, generate_latest
 
 from db_writer import BatchWriter
+from exchange_factory import create_exchange
 from redis_publisher import RedisPublisher
 from ws_client import ExchangeCollector
-from shared.config import EXCHANGES
+from shared.config import EXCHANGES, settings
 from shared.db import close_db_pool, get_db_pool
 
 log = structlog.get_logger()
@@ -69,6 +70,59 @@ async def _load_targets() -> dict[str, list[str]]:
     return targets or {"binance": list(DEFAULT_SYMBOLS)}
 
 
+async def _sync_pairs() -> None:
+    """Синхронизирует tracked_pairs из TRACKED_SYMBOLS env var.
+
+    Для каждой активной биржи загружает markets через CCXT, проверяет
+    доступность каждой пары, и делает upsert только существующих пар.
+    """
+    raw = settings.tracked_symbols
+    if not raw:
+        return
+    desired = [s.strip() for s in raw.split(",") if s.strip()]
+    if not desired:
+        return
+
+    try:
+        pool = await get_db_pool()
+        ex_rows = await pool.fetch(
+            "SELECT exchange FROM exchange_configs WHERE is_active = true"
+        )
+    except Exception as err:
+        log.warning("sync_pairs_db_unavailable", error=str(err))
+        return
+
+    active_exchanges = [r["exchange"] for r in ex_rows if r["exchange"] in EXCHANGES]
+
+    for ex_name in active_exchanges:
+        exchange = create_exchange(ex_name)
+        try:
+            await exchange.load_markets()
+            available = set(exchange.markets.keys())
+            valid_symbols = [s for s in desired if s in available]
+            log.info(
+                "sync_pairs_validated",
+                exchange=ex_name,
+                requested=len(desired),
+                available=len(valid_symbols),
+                skipped=len(desired) - len(valid_symbols),
+            )
+            if valid_symbols:
+                await pool.executemany(
+                    """INSERT INTO tracked_pairs (symbol, exchange, is_active, priority)
+                       VALUES ($1, $2, true, 2)
+                       ON CONFLICT (symbol, exchange) DO UPDATE SET is_active = true""",
+                    [(sym, ex_name) for sym in valid_symbols],
+                )
+        except Exception as err:
+            log.warning("sync_pairs_exchange_error", exchange=ex_name, error=str(err))
+        finally:
+            try:
+                await exchange.close()
+            except Exception:
+                pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _state["started_at"] = time.time()
@@ -77,6 +131,7 @@ async def lifespan(app: FastAPI):
     await publisher.connect()
     _state["publisher"] = publisher
 
+    await _sync_pairs()
     targets = await _load_targets()
     collectors = [ExchangeCollector(name, symbols, publisher) for name, symbols in targets.items()]
     for collector in collectors:
