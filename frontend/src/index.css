@@ -55,3 +55,25 @@ body {
   background: rgb(var(--c-edge));
   border-radius: 4px;
 }
+
+/* Tooltip portal */
+.tooltip-portal {
+  position: fixed;
+  z-index: 9999;
+  transform: translate(-50%, -100%) translateY(-8px);
+  max-width: 280px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgb(var(--c-surface2));
+  border: 1px solid rgb(var(--c-edge));
+  color: rgb(var(--c-ink));
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  animation: tooltip-in 0.15s ease-out;
+}
+@keyframes tooltip-in {
+  from { opacity: 0; transform: translate(-50%, -100%) translateY(-4px); }
+  to   { opacity: 1; transform: translate(-50%, -100%) translateY(-8px); }
+}

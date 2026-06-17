@@ -3,8 +3,10 @@ import { AlertTriangle, Save, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import api from '../lib/api'
 import { SETTING_FIELDS } from '../types'
+import { SETTINGS_GLOSSARY } from '../lib/glossary'
 import Panel from '../components/Panel'
 import Modal from '../components/Modal'
+import Tooltip from '../components/Tooltip'
 import { cn } from '../lib/utils'
 
 export default function Settings() {
@@ -90,7 +92,9 @@ export default function Settings() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {SETTING_FIELDS.map((f) => (
             <label key={f.key} className="flex flex-col gap-1">
-              <span className="text-sm text-ink">{f.label}</span>
+              <span className="text-sm text-ink">
+                <Tooltip text={SETTINGS_GLOSSARY[f.key] || f.hint}>{f.label}</Tooltip>
+              </span>
               <div className="flex items-center rounded-lg border border-edge bg-surface2 focus-within:border-accent">
                 <input
                   type="number"

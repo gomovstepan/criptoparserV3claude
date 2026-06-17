@@ -1,5 +1,7 @@
 import type { Trade } from '../types'
 import { cn } from '../lib/utils'
+import { GLOSSARY } from '../lib/glossary'
+import Tooltip from './Tooltip'
 
 export default function RecentTradesTable({ items }: { items: Trade[] }) {
   return (
@@ -7,9 +9,9 @@ export default function RecentTradesTable({ items }: { items: Trade[] }) {
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-xs uppercase text-muted">
-            <th className="pb-2 pr-4 font-medium">Pair</th>
-            <th className="pb-2 pr-4 font-medium">Route</th>
-            <th className="pb-2 text-right font-medium">Net P&amp;L</th>
+            <th className="pb-2 pr-4 font-medium"><Tooltip text={GLOSSARY['Pair']}>Pair</Tooltip></th>
+            <th className="pb-2 pr-4 font-medium"><Tooltip text={GLOSSARY['Route']}>Route</Tooltip></th>
+            <th className="pb-2 text-right font-medium"><Tooltip text={GLOSSARY['Net P&L']}>Net P&amp;L</Tooltip></th>
           </tr>
         </thead>
         <tbody>

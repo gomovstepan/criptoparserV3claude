@@ -1,6 +1,8 @@
 import type { Trade } from '../types'
 import { cn } from '../lib/utils'
+import { GLOSSARY } from '../lib/glossary'
 import StatusBadge from './StatusBadge'
+import Tooltip from './Tooltip'
 
 function fmtTime(iso: string): string {
   const d = new Date(iso)
@@ -22,13 +24,13 @@ export default function TradeTable({
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-xs uppercase text-muted">
-            <th className="pb-2 pr-4 font-medium">Time</th>
-            <th className="pb-2 pr-4 font-medium">Pair</th>
-            <th className="pb-2 pr-4 font-medium">Route</th>
-            <th className="pb-2 pr-4 text-right font-medium">Amount</th>
-            <th className="pb-2 pr-4 text-right font-medium">Gross P&amp;L</th>
-            <th className="pb-2 pr-4 text-right font-medium">Net P&amp;L</th>
-            <th className="pb-2 font-medium">Status</th>
+            <th className="pb-2 pr-4 font-medium"><Tooltip text={GLOSSARY['Time']}>Time</Tooltip></th>
+            <th className="pb-2 pr-4 font-medium"><Tooltip text={GLOSSARY['Pair']}>Pair</Tooltip></th>
+            <th className="pb-2 pr-4 font-medium"><Tooltip text={GLOSSARY['Route']}>Route</Tooltip></th>
+            <th className="pb-2 pr-4 text-right font-medium"><Tooltip text={GLOSSARY['Amount']}>Amount</Tooltip></th>
+            <th className="pb-2 pr-4 text-right font-medium"><Tooltip text={GLOSSARY['Gross P&L']}>Gross P&amp;L</Tooltip></th>
+            <th className="pb-2 pr-4 text-right font-medium"><Tooltip text={GLOSSARY['Net P&L']}>Net P&amp;L</Tooltip></th>
+            <th className="pb-2 font-medium"><Tooltip text={GLOSSARY['Status']}>Status</Tooltip></th>
           </tr>
         </thead>
         <tbody>
