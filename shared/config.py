@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
+    # ── Tracked pairs (collector) ──
+    tracked_symbols: str = "BTC/USDT,ETH/USDT"
+
     @property
     def database_dsn(self) -> str:
         """DSN для asyncpg."""
