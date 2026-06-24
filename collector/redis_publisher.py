@@ -9,6 +9,7 @@ import redis.asyncio as redis
 
 from shared.config import settings
 from shared.models import PriceTick
+from shared.redis_utils import wait_until_ready
 
 PRICES_STREAM = "prices"
 PRICES_MAXLEN = 100_000
@@ -22,7 +23,7 @@ class RedisPublisher:
 
     async def connect(self) -> None:
         self._redis = redis.from_url(settings.redis_url, decode_responses=True)
-        await self._redis.ping()
+        await wait_until_ready(self._redis)
 
     async def publish_price(self, tick: PriceTick) -> None:
         """XADD одного тика в stream ``prices``."""

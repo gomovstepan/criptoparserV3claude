@@ -15,13 +15,15 @@ and `UIUX_DASHBOARD.md`. All 16 build phases are complete and verified in Docker
 ## Commands
 
 ```bash
-# Backend stack (DB, Redis, 5 microservices)
+# Main stack (DB, Redis, 5 microservices, frontend) — prod defaults baked in
+# (restart: unless-stopped, json-file log rotation, resource limits).
 docker compose up -d --build
 docker compose ps
 curl http://localhost:8000/health        # api-gateway
 
-# Production stack + Prometheus/Grafana
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# Monitoring stack (Prometheus, Grafana, Loki, Promtail) — joins external
+# arbitrage-net; bring up the main stack first.
+docker compose -f docker-compose.monitoring.yml up -d
 
 # Tests — run INSIDE the running containers (stdlib unittest, no pip needed, offline-safe)
 docker compose up -d
@@ -62,13 +64,30 @@ Each microservice is a FastAPI app owning one Redis consumer group:
 - **executor** — cg `executor-cg`; paper trading with 0.1–0.3% slippage, position =
   `max_position_pct%` of buy-exchange balance; balances in Redis Hash `balance:{ex}` +
   hypertable. Kill switch is Redis key `executor:kill_switch` ("1"/"0"), re-read each loop.
+  Gated by `PAPER` env (`settings.paper`): when `false` it does NOT subscribe to
+  `opportunities` and creates no trades (real trading is unimplemented) — balances/kill
+  switch stay live. `/health` reports `paper`.
 - **notifier** — aiogram 3 polling bot; cg `notifier-cg` on `opportunities`+`trades`;
   rate-limited queue `telegram_queue` (20/s). Thresholds re-read from `settings`.
 - **api-gateway** — REST `/api/v1/*`, WebSocket `/ws`, JWT HS256 (PyJWT) + PBKDF2 passwords,
   rate limiter 100/min/IP, CORS from `settings.cors_origins`. Routers in `routers/` subpackage.
+  `PUT /api/v1/balance` (paper-only, 403 otherwise) and `DELETE /api/v1/trades` (filtered
+  DELETE, or TRUNCATE with no filters) mutate state; `GET /api/v1/config` exposes `{paper}`
+  to the frontend.
 
 `settings` table is the live control plane: scanner/notifier/executor poll it every ~10s,
 so thresholds and the kill switch change from the UI without rebuilds.
+
+## Logging & observability
+
+`shared/logging_config.py::setup_logging("<service>")` is called once per service at
+`main` import (BEFORE `structlog.get_logger()`), so it captures uvicorn/ccxt/aiogram too.
+It writes JSON lines to `${LOG_DIR}/<service>.log` (default `/app/logs`, bind-mounted from
+`./logs` on every service) AND human-readable lines to stdout (`docker logs`). Rotating at
+10 MB × 5 files. The monitoring stack (`docker-compose.monitoring.yml`) adds **Promtail → Loki → Grafana** (`monitoring/loki-config.yml`,
+`promtail-config.yml`, `grafana-logs-dashboard.json`): Promtail reads `./logs/*.log`, derives
+the `service` label from the filename and `level` from the JSON. Loki keeps 7 days. Tune via
+`LOG_DIR` / `LOG_LEVEL` env.
 
 ## Conventions and gotchas
 

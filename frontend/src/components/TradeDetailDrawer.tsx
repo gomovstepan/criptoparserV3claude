@@ -1,6 +1,7 @@
 import { X } from 'lucide-react'
 import type { Trade } from '../types'
 import { cn } from '../lib/utils'
+import { formatPrice } from '../lib/format'
 import StatusBadge from './StatusBadge'
 
 function Row({ label, value, accent }: { label: string; value: string; accent?: 'pos' | 'neg' }) {
@@ -63,8 +64,8 @@ export default function TradeDetailDrawer({ trade, onClose }: { trade: Trade | n
 
             <Row label="Время" value={new Date(trade.executed_at).toLocaleString()} />
             <Row label="Маршрут" value={`${trade.buy_exchange} → ${trade.sell_exchange}`} />
-            {trade.buy_price != null && <Row label="Цена покупки" value={`$${trade.buy_price.toLocaleString()}`} />}
-            {trade.sell_price != null && <Row label="Цена продажи" value={`$${trade.sell_price.toLocaleString()}`} />}
+            {trade.buy_price != null && <Row label="Цена покупки" value={`$${formatPrice(trade.buy_price)}`} />}
+            {trade.sell_price != null && <Row label="Цена продажи" value={`$${formatPrice(trade.sell_price)}`} />}
             <Row label="Объём" value={trade.amount.toFixed(6)} />
             <Row label="Gross P&L" value={`$${trade.gross_pnl.toFixed(2)}`} accent={trade.gross_pnl >= 0 ? 'pos' : 'neg'} />
             <Row label="Net P&L" value={`$${trade.net_pnl.toFixed(2)}`} accent={trade.net_pnl >= 0 ? 'pos' : 'neg'} />

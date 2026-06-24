@@ -23,9 +23,11 @@ from redis_publisher import RedisPublisher
 from ws_client import ExchangeCollector
 from shared.config import EXCHANGES, settings
 from shared.db import close_db_pool, get_db_pool
+from shared.logging_config import setup_logging
 
-log = structlog.get_logger()
 SERVICE = "collector"
+setup_logging(SERVICE)
+log = structlog.get_logger()
 DEFAULT_SYMBOLS = ["BTC/USDT"]
 
 # ── Prometheus ──

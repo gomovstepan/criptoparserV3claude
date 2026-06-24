@@ -1,5 +1,19 @@
 # Крипто-арбитражная система — оркестрация инфраструктуры и микросервисов.
 # Сеть arbitrage-net; shared/ монтируется в каждый backend как read-only пакет.
+# Прод-настройки (restart, ротация docker-логов, лимиты ресурсов) встроены сюда.
+#
+# Запуск:
+#   docker compose up -d --build
+# Мониторинг (Prometheus/Grafana/Loki/Promtail) — отдельный файл:
+#   docker compose -f docker-compose.monitoring.yml up -d
+
+x-prod-defaults: &prod
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
 
 x-healthcheck-defaults: &svc-healthcheck
   interval: 10s
@@ -12,6 +26,7 @@ services:
   timescaledb:
     image: timescale/timescaledb:latest-pg18
     container_name: arb-timescaledb
+    <<: *prod
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -25,12 +40,22 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    deploy:
+      resources:
+        limits: { cpus: "1.5", memory: 1g }
     networks: [arbitrage-net]
 
   redis:
     image: redis:7-alpine
     container_name: arb-redis
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    <<: *prod
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --appendonly no
+      --save ""
+      --maxmemory 400mb
+      --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
     healthcheck:
@@ -38,15 +63,20 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512m }
     networks: [arbitrage-net]
 
   # ── Микросервисы ────────────────────────────────────────────────────────
   collector:
     build: ./collector
     container_name: arb-collector
+    <<: *prod
     env_file: .env
     volumes:
       - ./shared:/app/shared:ro
+      - ./logs:/app/logs
     depends_on:
       redis:
         condition: service_healthy
@@ -55,15 +85,19 @@ services:
     healthcheck:
       <<: *svc-healthcheck
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
-    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512m }
     networks: [arbitrage-net]
 
   scanner:
     build: ./scanner
     container_name: arb-scanner
+    <<: *prod
     env_file: .env
     volumes:
       - ./shared:/app/shared:ro
+      - ./logs:/app/logs
     depends_on:
       redis:
         condition: service_healthy
@@ -72,15 +106,19 @@ services:
     healthcheck:
       <<: *svc-healthcheck
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
-    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512m }
     networks: [arbitrage-net]
 
   executor:
     build: ./executor
     container_name: arb-executor
+    <<: *prod
     env_file: .env
     volumes:
       - ./shared:/app/shared:ro
+      - ./logs:/app/logs
     depends_on:
       redis:
         condition: service_healthy
@@ -89,15 +127,19 @@ services:
     healthcheck:
       <<: *svc-healthcheck
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
-    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512m }
     networks: [arbitrage-net]
 
   notifier:
     build: ./notifier
     container_name: arb-notifier
+    <<: *prod
     env_file: .env
     volumes:
       - ./shared:/app/shared:ro
+      - ./logs:/app/logs
     depends_on:
       redis:
         condition: service_healthy
@@ -106,17 +148,21 @@ services:
     healthcheck:
       <<: *svc-healthcheck
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health')"]
-    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256m }
     networks: [arbitrage-net]
 
   api-gateway:
     build: ./api-gateway
     container_name: arb-api-gateway
+    <<: *prod
     ports:
       - "8000:8000"
     env_file: .env
     volumes:
       - ./shared:/app/shared:ro
+      - ./logs:/app/logs
     depends_on:
       redis:
         condition: service_healthy
@@ -125,19 +171,28 @@ services:
     healthcheck:
       <<: *svc-healthcheck
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512m }
     networks: [arbitrage-net]
 
   frontend:
-    build:
-      context: ./frontend
+    build: ./frontend
     container_name: arb-frontend
+    <<: *prod
     ports:
       - "5173:80"
     depends_on:
       api-gateway:
         condition: service_healthy
-    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256m }
     networks: [arbitrage-net]
 
 volumes:

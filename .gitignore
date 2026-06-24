@@ -31,3 +31,7 @@ Thumbs.db
 
 # Логи
 *.log
+*.log.*
+# Каталог логов сервисов (bind-mount ./logs) целиком, кроме плейсхолдера.
+logs/*
+!logs/.gitkeep

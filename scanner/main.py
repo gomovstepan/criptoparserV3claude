@@ -21,11 +21,14 @@ from prometheus_client import CONTENT_TYPE_LATEST, Gauge, generate_latest
 from dedup import OpportunityDedup
 from shared.config import settings
 from shared.db import close_db_pool, get_db_pool
+from shared.logging_config import setup_logging
 from shared.models import Opportunity
+from shared.redis_utils import wait_until_ready
 from spread_calculator import calculate_spreads
 
-log = structlog.get_logger()
 SERVICE = "scanner"
+setup_logging(SERVICE)
+log = structlog.get_logger()
 
 PRICES_STREAM = "prices"
 OPPORTUNITIES_STREAM = "opportunities"
@@ -152,7 +155,7 @@ async def _scan_loop() -> None:
 async def lifespan(app: FastAPI):
     _state["started_at"] = time.time()
     _state["redis"] = redis.from_url(settings.redis_url, decode_responses=True)
-    await _state["redis"].ping()
+    await wait_until_ready(_state["redis"])
     _state["pool"] = await get_db_pool()
     _state["dedup"] = OpportunityDedup(_state["redis"], ttl=5)
     await _ensure_group(_state["redis"])

@@ -27,6 +27,11 @@ interface TradeState {
   setPageSize: (n: number) => void
   select: (t: Trade | null) => void
   fetch: () => Promise<void>
+  deleteFiltered: () => Promise<{ deleted: number; truncated: boolean }>
+}
+
+export function hasActiveFilters(f: TradeFilters): boolean {
+  return Boolean(f.status || f.symbol || f.exchange || f.start || f.end)
 }
 
 /** Построить query-params из фильтров (используется и стором, и кнопкой Export). */
@@ -69,5 +74,12 @@ export const useTradeStore = create<TradeState>((set, get) => ({
     } catch {
       set({ loading: false })
     }
+  },
+  deleteFiltered: async () => {
+    const { filters } = get()
+    const r = await api.delete('/api/v1/trades', { params: filtersToParams(filters) })
+    set({ page: 1 })
+    await get().fetch()
+    return r.data as { deleted: number; truncated: boolean }
   },
 }))

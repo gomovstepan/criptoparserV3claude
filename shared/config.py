@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     # ── Tracked pairs (collector) ──
     tracked_symbols: str = "BTC/USDT,ETH/USDT"
 
+    # ── Trading mode ──
+    # true — paper (executor симулирует сделки на виртуальных балансах),
+    # false — реальная торговля (не реализована, executor отключён).
+    paper: bool = True
+
     @property
     def database_dsn(self) -> str:
         """DSN для asyncpg."""

@@ -1,13 +1,19 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, Save, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, Save, ShieldAlert, ShieldCheck, Wallet } from 'lucide-react'
 import { toast } from 'sonner'
 import api from '../lib/api'
-import { SETTING_FIELDS } from '../types'
+import { EXCHANGE_LIST, SETTING_FIELDS } from '../types'
 import { SETTINGS_GLOSSARY } from '../lib/glossary'
 import Panel from '../components/Panel'
 import Modal from '../components/Modal'
 import Tooltip from '../components/Tooltip'
 import { cn } from '../lib/utils'
+
+interface BalanceItem {
+  exchange: string
+  asset: string
+  amount: number
+}
 
 export default function Settings() {
   const [values, setValues] = useState<Record<string, number>>({})
@@ -15,6 +21,9 @@ export default function Settings() {
   const [killActive, setKillActive] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
   const [killPending, setKillPending] = useState(false)
+  const [paper, setPaper] = useState(false)
+  const [balances, setBalances] = useState<Record<string, number>>({})
+  const [savingBalances, setSavingBalances] = useState(false)
 
   // Часть значений в БД хранится с float32-шумом (напр. 0.30000001192…).
   // Округляем до 6 знаков, чтобы поля были читаемыми; сохранение чинит и БД.
@@ -29,6 +38,17 @@ export default function Settings() {
     }
   }
 
+  const loadBalances = async () => {
+    try {
+      const { data } = await api.get<{ items: BalanceItem[] }>('/api/v1/balance')
+      const map: Record<string, number> = {}
+      for (const it of data.items) map[it.exchange] = clean(it.amount)
+      setBalances(map)
+    } catch {
+      toast.error('Не удалось загрузить балансы')
+    }
+  }
+
   useEffect(() => {
     api
       .get('/api/v1/settings')
@@ -39,10 +59,23 @@ export default function Settings() {
       })
       .catch(() => toast.error('Не удалось загрузить настройки'))
     loadKill()
+    api
+      .get<{ paper: boolean }>('/api/v1/config')
+      .then(({ data }) => {
+        setPaper(Boolean(data.paper))
+        if (data.paper) loadBalances()
+      })
+      .catch(() => {
+        /* нет /config — считаем, что не paper, панель балансов скрыта */
+      })
   }, [])
 
   const setField = (key: string, raw: string) => {
     setValues((prev) => ({ ...prev, [key]: raw === '' ? 0 : Number(raw) }))
+  }
+
+  const setBalance = (exchange: string, raw: string) => {
+    setBalances((prev) => ({ ...prev, [exchange]: raw === '' ? 0 : Number(raw) }))
   }
 
   const save = async () => {
@@ -54,6 +87,25 @@ export default function Settings() {
       toast.error('Ошибка сохранения')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const saveBalances = async () => {
+    for (const ex of EXCHANGE_LIST) {
+      const v = balances[ex]
+      if (v == null || Number.isNaN(v) || v < 0) {
+        toast.error(`Некорректный баланс для ${ex}`)
+        return
+      }
+    }
+    setSavingBalances(true)
+    try {
+      await api.put('/api/v1/balance', { balances })
+      toast.success('Балансы применены')
+    } catch {
+      toast.error('Не удалось применить балансы')
+    } finally {
+      setSavingBalances(false)
     }
   }
 
@@ -110,6 +162,46 @@ export default function Settings() {
           ))}
         </div>
       </Panel>
+
+      {paper && (
+        <Panel
+          title="Балансы бирж (paper)"
+          right={
+            <button
+              onClick={saveBalances}
+              disabled={savingBalances}
+              className="flex items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-page transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              <Wallet size={15} />
+              {savingBalances ? 'Применение…' : 'Применить балансы'}
+            </button>
+          }
+        >
+          <div className="mb-3 text-xs text-muted">
+            Виртуальные USDT-балансы для симуляции. Размер позиции считается как
+            max_position_pct% от баланса buy-биржи; правила исполнения те же, что и
+            при настоящей торговле.
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {EXCHANGE_LIST.map((ex) => (
+              <label key={ex} className="flex flex-col gap-1">
+                <span className="text-sm text-ink capitalize">{ex}</span>
+                <div className="flex items-center rounded-lg border border-edge bg-surface2 focus-within:border-accent">
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={balances[ex] ?? ''}
+                    onChange={(e) => setBalance(ex, e.target.value)}
+                    className="w-full bg-transparent px-3 py-2 text-sm text-ink outline-none"
+                  />
+                  <span className="px-3 text-xs text-muted">USDT</span>
+                </div>
+              </label>
+            ))}
+          </div>
+        </Panel>
+      )}
 
       <Panel title="Аварийная остановка">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
