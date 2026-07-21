@@ -87,7 +87,10 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
     deploy:
       resources:
-        limits: { cpus: "1.0", memory: 512m }
+        # 36 пар × 7 бирж = 252 параллельных WS-подписки в одном процессе.
+        # Буферы orderbook'ов в CCXT Pro суммарно занимают ~600-700 MB.
+        # Старый лимит 512m приводил к OOM-килам каждые 3-4 минуты.
+        limits: { cpus: "1.0", memory: 1g }
     networks: [arbitrage-net]
 
   scanner:

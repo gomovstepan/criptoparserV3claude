@@ -39,6 +39,15 @@ async def analytics_pnl(
         days,
     )
 
+    rebalance_fees = await pool.fetchval(
+        """
+        SELECT COALESCE(sum(change_amount), 0)
+        FROM balance
+        WHERE reason = 'rebalance' AND time > now() - make_interval(days => $1)
+        """,
+        days,
+    )
+
     rows = await pool.fetch(
         """
         SELECT time_bucket('1 day', time) AS day,
@@ -75,7 +84,7 @@ async def analytics_pnl(
         "winning_trades": winning,
         "win_rate": win_rate,
         "total_gross_pnl": round(float(summary["total_gross_pnl"]), 2),
-        "total_net_pnl": round(float(summary["total_net_pnl"]), 2),
+        "total_net_pnl": round(float(summary["total_net_pnl"]) + float(rebalance_fees), 2),
         "avg_net_pnl": round(float(summary["avg_net_pnl"]), 2),
         "avg_trade_duration_ms": int(float(summary["avg_duration_ms"])),
         "best_trade": round(float(summary["best_trade"]), 2),

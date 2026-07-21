@@ -101,6 +101,14 @@ async def _persist(results: list[ExecutionResult]) -> None:
             balance_records.append(
                 (executed, exchange, "USDT", _D(new_balance), t.id, _D(change), "trade")
             )
+        if res.rebalance:
+            rb = res.rebalance
+            balance_records.append(
+                (executed, rb.donor, "USDT", _D(rb.donor_new_balance), None, _D(-rb.gross_amount), "rebalance")
+            )
+            balance_records.append(
+                (executed, rb.receiver, "USDT", _D(rb.receiver_new_balance), None, _D(rb.net_amount), "rebalance")
+            )
     if trade_records:
         await pool.copy_records_to_table("trades", records=trade_records, columns=_TRADE_COLUMNS)
     if balance_records:
@@ -155,7 +163,12 @@ async def lifespan(app: FastAPI):
     await _ensure_group(r)
 
     max_pos = await pool.fetchval("SELECT value FROM settings WHERE key='max_position_pct'")
-    engine = PaperTradingEngine(r, max_position_pct=float(str(max_pos).strip('"')) if max_pos else 10.0)
+    reb_thresh = await pool.fetchval("SELECT value FROM settings WHERE key='rebalance_threshold_usd'")
+    engine = PaperTradingEngine(
+        r,
+        max_position_pct=float(str(max_pos).strip('"')) if max_pos else 10.0,
+        rebalance_threshold=float(str(reb_thresh).strip('"')) if reb_thresh else 100.0,
+    )
     engine.kill_switch = (await r.get(KILL_SWITCH_KEY)) == "1"
     _state["engine"] = engine
 
@@ -213,7 +226,11 @@ async def health() -> dict:
             "SELECT count(*) AS n, COALESCE(sum(net_pnl), 0) AS pnl "
             "FROM trades WHERE time >= date_trunc('day', now())"
         )
-        trades_today, total_pnl = int(row["n"]), float(row["pnl"])
+        reb_fee = await pool.fetchval(
+            "SELECT COALESCE(sum(change_amount), 0) FROM balance "
+            "WHERE reason = 'rebalance' AND time >= date_trunc('day', now())"
+        )
+        trades_today, total_pnl = int(row["n"]), float(row["pnl"]) + float(reb_fee)
     except Exception:  # noqa: BLE001
         pass
     return {

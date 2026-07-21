@@ -21,6 +21,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Gauge, generate_latest
 from dedup import OpportunityDedup
 from shared.config import settings
 from shared.db import close_db_pool, get_db_pool
+from shared.depth import DEPTH_MAX_AGE_MS, depth_key, is_fresh, parse_depth
 from shared.logging_config import setup_logging
 from shared.models import Opportunity
 from shared.redis_utils import wait_until_ready
@@ -131,11 +132,22 @@ async def _scan_loop() -> None:
                     continue
 
             found: list[Opportunity] = []
+            now_ms = int(time.time() * 1000)
             for sym in updated:
                 book = prices[sym]
                 n = len(book)
                 _state["spreads_calculated"] += n * (n - 1)
-                for opp in calculate_spreads(sym, book, _state["min_spread"], _state["estimated_notional"]):
+                keys = [depth_key(ex, sym) for ex in book]
+                raws = await r.mget(keys) if keys else []
+                depth_by_ex: dict[str, dict] = {}
+                for ex, raw in zip(book.keys(), raws):
+                    parsed = parse_depth(raw)
+                    if is_fresh(parsed, now_ms, DEPTH_MAX_AGE_MS):
+                        depth_by_ex[ex] = parsed
+                for opp in calculate_spreads(
+                    sym, book, _state["min_spread"], _state["estimated_notional"],
+                    depth=depth_by_ex,
+                ):
                     if await dedup.is_new(opp):
                         found.append(opp)
 

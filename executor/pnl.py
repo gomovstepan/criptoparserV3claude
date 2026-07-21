@@ -2,7 +2,8 @@
 
 Slippage ухудшает обе ноги: покупка исполняется чуть выше ask, продажа — чуть
 ниже bid. gross_pnl — идеальная разница цен без издержек; net_pnl учитывает
-slippage, taker-комиссии обеих бирж и комиссию вывода.
+slippage и taker-комиссии обеих бирж. Комиссия вывода больше НЕ входит в net_pnl
+сделки — она платится один раз при ребалансе (см. executor/rebalance.py).
 """
 from __future__ import annotations
 
@@ -42,7 +43,7 @@ def calculate_pnl(
     slippage_cost = amount * (buy_price + sell_price) * slippage_pct / 100
 
     gross_pnl = amount * (sell_price - buy_price)
-    net_pnl = sell_proceeds - buy_cost - buy_fee - sell_fee - withdrawal_fee
+    net_pnl = sell_proceeds - buy_cost - buy_fee - sell_fee
 
     return PnLResult(
         amount=amount,

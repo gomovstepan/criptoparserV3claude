@@ -51,7 +51,8 @@ INSERT INTO settings (key, value, description) VALUES
 ('notification_spread_threshold', '0.50', 'Min spread % for Telegram alert'),
 ('notification_trade_min_pnl', '5.00', 'Min |net P&L| USDT to alert a trade in Telegram'),
 ('daily_loss_limit_pct', '5.00', 'Daily loss limit % - stop trading'),
-('estimated_trade_notional', '1000.00', 'Estimated trade notional USD for spread fee calculation')
+('estimated_trade_notional', '1000.00', 'Estimated trade notional USD for spread fee calculation'),
+('rebalance_threshold_usd', '100.00', 'Balance threshold (USDT) triggering rebalance from richest exchange')
 ON CONFLICT (key) DO NOTHING;
 
 
@@ -124,8 +125,10 @@ CREATE TABLE IF NOT EXISTS prices (
     symbol          VARCHAR(20) NOT NULL,
     bid             DECIMAL(18,8) NOT NULL,
     ask             DECIMAL(18,8) NOT NULL,
-    bid_volume      DECIMAL(18,8),
-    ask_volume      DECIMAL(18,8),
+    -- Объёмы шире precision: у мемкоинов (SHIB/PEPE/BONK/FLOKI)
+    -- объём в стакане регулярно превышает 10^10 единиц.
+    bid_volume      DECIMAL(28,8),
+    ask_volume      DECIMAL(28,8),
     latency_ms      INTEGER,
     CONSTRAINT prices_bid_positive CHECK (bid > 0),
     CONSTRAINT prices_ask_positive CHECK (ask > 0)
@@ -236,7 +239,7 @@ CREATE TABLE IF NOT EXISTS balance (
     change_amount   DECIMAL(18,8),
     reason          VARCHAR(50) NOT NULL DEFAULT 'trade',
     CONSTRAINT balance_positive CHECK (amount >= 0),
-    CONSTRAINT balance_reason_check CHECK (reason IN ('trade', 'deposit', 'withdrawal', 'adjustment', 'initial'))
+    CONSTRAINT balance_reason_check CHECK (reason IN ('trade', 'deposit', 'withdrawal', 'adjustment', 'initial', 'rebalance'))
 );
 
 SELECT create_hypertable('balance', 'time',

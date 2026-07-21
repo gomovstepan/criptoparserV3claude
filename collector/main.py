@@ -73,17 +73,19 @@ async def _load_targets() -> dict[str, list[str]]:
 
 
 async def _sync_pairs() -> None:
-    """Синхронизирует tracked_pairs из TRACKED_SYMBOLS env var.
+    """Синхронизирует tracked_pairs с реальными рынками бирж.
 
-    Для каждой активной биржи загружает markets через CCXT, проверяет
-    доступность каждой пары, и делает upsert только существующих пар.
+    Алгоритм:
+    1. Если задан ``TRACKED_SYMBOLS`` — берём его как «желаемый список» и
+       upsert'им только те пары, что доступны на бирже.
+    2. Для каждой активной биржи через CCXT ``load_markets()`` получаем
+       список доступных символов и **деактивируем** в БД любые пары,
+       которые числятся ``is_active=true``, но на бирже отсутствуют —
+       без этого collector бесконечно ретраит подписку и забивает логи
+       ``ws_error: does not have market symbol``.
     """
     raw = settings.tracked_symbols
-    if not raw:
-        return
-    desired = [s.strip() for s in raw.split(",") if s.strip()]
-    if not desired:
-        return
+    desired = [s.strip() for s in raw.split(",") if s.strip()] if raw else []
 
     try:
         pool = await get_db_pool()
@@ -101,20 +103,40 @@ async def _sync_pairs() -> None:
         try:
             await exchange.load_markets()
             available = set(exchange.markets.keys())
-            valid_symbols = [s for s in desired if s in available]
-            log.info(
-                "sync_pairs_validated",
-                exchange=ex_name,
-                requested=len(desired),
-                available=len(valid_symbols),
-                skipped=len(desired) - len(valid_symbols),
+
+            if desired:
+                valid_symbols = [s for s in desired if s in available]
+                if valid_symbols:
+                    await pool.executemany(
+                        """INSERT INTO tracked_pairs (symbol, exchange, is_active, priority)
+                           VALUES ($1, $2, true, 2)
+                           ON CONFLICT (symbol, exchange) DO UPDATE SET is_active = true""",
+                        [(sym, ex_name) for sym in valid_symbols],
+                    )
+                log.info(
+                    "sync_pairs_validated",
+                    exchange=ex_name,
+                    requested=len(desired),
+                    available=len(valid_symbols),
+                    skipped=len(desired) - len(valid_symbols),
+                )
+
+            # Деактивируем пары из БД, которых нет на бирже — главный фикс
+            # повторяющихся ws_error для ZEC/XMR/TON и т.п.
+            db_pairs = await pool.fetch(
+                "SELECT symbol FROM tracked_pairs WHERE exchange = $1 AND is_active = true",
+                ex_name,
             )
-            if valid_symbols:
-                await pool.executemany(
-                    """INSERT INTO tracked_pairs (symbol, exchange, is_active, priority)
-                       VALUES ($1, $2, true, 2)
-                       ON CONFLICT (symbol, exchange) DO UPDATE SET is_active = true""",
-                    [(sym, ex_name) for sym in valid_symbols],
+            unknown = [r["symbol"] for r in db_pairs if r["symbol"] not in available]
+            if unknown:
+                await pool.execute(
+                    "UPDATE tracked_pairs SET is_active = false "
+                    "WHERE exchange = $1 AND symbol = ANY($2::text[])",
+                    ex_name, unknown,
+                )
+                log.info(
+                    "sync_pairs_deactivated",
+                    exchange=ex_name, symbols=unknown, count=len(unknown),
                 )
         except Exception as err:
             log.warning("sync_pairs_exchange_error", exchange=ex_name, error=str(err))

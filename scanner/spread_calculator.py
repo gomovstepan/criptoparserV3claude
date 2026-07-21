@@ -1,14 +1,18 @@
 """Расчёт межбиржевых спредов по одной паре.
 
 Для каждой упорядоченной пары бирж (A=buy, B=sell): покупаем по ask на A,
-продаём по bid на B. gross_spread = (sell_price - buy_price) / buy_price * 100.
-net_spread дополнительно учитывает taker-комиссии обеих бирж и комиссию вывода.
+продаём по bid на B. Если известна глубина стакана обеих бирж — считаем
+исполнимые VWAP-цены на плановый notional и используем их как buy/sell.
+Иначе fallback на top-of-book. Спред считается по буквальным ценам
+исполнения; net дополнительно учитывает taker-комиссии обеих бирж и
+комиссию вывода.
 """
 from __future__ import annotations
 
 import time
 
 from shared.config import EXCHANGES
+from shared.depth import walk_asks_for_notional, walk_bids_for_amount
 from shared.models import Opportunity
 
 
@@ -17,25 +21,42 @@ def calculate_spreads(
     prices: dict[str, dict[str, float]],
     min_spread_pct: float,
     estimated_notional_usd: float = 1000.0,
+    depth: dict[str, dict] | None = None,
 ) -> list[Opportunity]:
     """Вернуть opportunities по символу, где gross_spread >= min_spread_pct.
 
-    ``prices`` — отображение exchange → {"bid": .., "ask": ..} (последние цены).
+    ``prices`` — exchange → {"bid": .., "ask": ..} (последние цены, fallback).
+    ``depth``  — exchange → {"ts", "bids": [[p,q]...], "asks": [[p,q]...]} (топ-N).
+                 Если для обеих бирж пары есть свежая глубина — считаем VWAP
+                 на ``estimated_notional_usd``; иначе — по top-of-book.
     """
     opportunities: list[Opportunity] = []
     exchanges = [ex for ex in prices if ex in EXCHANGES]
     now = int(time.time() * 1000)
+    depth = depth or {}
 
     for buy_ex in exchanges:
-        buy_price = prices[buy_ex].get("ask", 0.0)        # покупаем по ask
-        if buy_price <= 0:
+        top_ask = prices[buy_ex].get("ask", 0.0)
+        if top_ask <= 0:
             continue
         for sell_ex in exchanges:
             if sell_ex == buy_ex:
                 continue
-            sell_price = prices[sell_ex].get("bid", 0.0)  # продаём по bid
-            if sell_price <= 0:
+            top_bid = prices[sell_ex].get("bid", 0.0)
+            if top_bid <= 0:
                 continue
+
+            buy_price, sell_price = top_ask, top_bid
+            buy_depth, sell_depth = depth.get(buy_ex), depth.get(sell_ex)
+            if buy_depth and sell_depth:
+                walked_buy = walk_asks_for_notional(buy_depth["asks"], estimated_notional_usd)
+                if walked_buy is None:
+                    continue  # глубины на buy-стороне не хватает — фантомный спред
+                amount, vwap_buy = walked_buy
+                vwap_sell = walk_bids_for_amount(sell_depth["bids"], amount)
+                if vwap_sell is None:
+                    continue  # на sell-стороне не хватает — тоже фантом
+                buy_price, sell_price = vwap_buy, vwap_sell
 
             gross = (sell_price - buy_price) / buy_price * 100
             if gross < min_spread_pct:

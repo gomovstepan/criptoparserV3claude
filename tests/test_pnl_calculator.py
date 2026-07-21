@@ -18,8 +18,8 @@ class TestPnLCalculator(unittest.TestCase):
             buy_fee_pct=0.1, sell_fee_pct=0.1, withdrawal_fee=1.0, slippage_pct=0.0,
         )
         self.assertAlmostEqual(r.gross_pnl, 2.0, places=6)
-        # net = 102 - 100 - 0.1 - 0.102 - 1.0 = 0.798
-        self.assertAlmostEqual(r.net_pnl, 0.798, places=6)
+        # net = 102 - 100 - 0.1 - 0.102 = 1.798 (комиссия вывода теперь только при ребалансе)
+        self.assertAlmostEqual(r.net_pnl, 1.798, places=6)
         self.assertEqual(r.slippage_cost, 0.0)
 
     def test_slippage_reduces_net_but_not_gross(self):
@@ -29,7 +29,7 @@ class TestPnLCalculator(unittest.TestCase):
         self.assertEqual(slip.gross_pnl, base.gross_pnl)
         # net проседает из-за худших цен исполнения
         self.assertLess(slip.net_pnl, base.net_pnl)
-        self.assertAlmostEqual(slip.net_pnl, -0.21199, places=4)
+        self.assertAlmostEqual(slip.net_pnl, 0.78801, places=4)
         self.assertGreater(slip.slippage_cost, 0.0)
 
     def test_effective_prices_worse_with_slippage(self):

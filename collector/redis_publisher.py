@@ -8,6 +8,7 @@ from __future__ import annotations
 import redis.asyncio as redis
 
 from shared.config import settings
+from shared.depth import DEPTH_TTL_SEC, depth_key, dump_depth
 from shared.models import PriceTick
 from shared.redis_utils import wait_until_ready
 
@@ -33,6 +34,17 @@ class RedisPublisher:
             tick.to_redis(),
             maxlen=PRICES_MAXLEN,
             approximate=True,
+        )
+
+    async def publish_depth(
+        self, exchange: str, symbol: str, bids: list, asks: list, ts: int,
+    ) -> None:
+        """SET depth:{exchange}:{symbol} = JSON топ-N уровней с TTL."""
+        assert self._redis is not None, "RedisPublisher не подключён"
+        await self._redis.set(
+            depth_key(exchange, symbol),
+            dump_depth(bids, asks, ts),
+            ex=DEPTH_TTL_SEC,
         )
 
     async def ping(self) -> bool:
