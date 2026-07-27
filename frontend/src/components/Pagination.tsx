@@ -1,4 +1,7 @@
+import { useId } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { formatCount } from '../lib/format'
+import Button from './Button'
 
 const PAGE_SIZES = [10, 25, 50, 100]
 
@@ -18,14 +21,21 @@ export default function Pagination({
   onPage: (p: number) => void
   onPageSize: (n: number) => void
 }) {
+  const id = useId()
+  const pages = Math.max(totalPages, 1)
+
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 pt-3 text-sm">
+    <nav
+      aria-label="Навигация по страницам"
+      className="flex flex-wrap items-center justify-between gap-3 pt-3 text-sm"
+    >
       <div className="flex items-center gap-2 text-muted">
-        <span>Строк на странице</span>
+        <label htmlFor={id}>Строк на странице</label>
         <select
+          id={id}
           value={pageSize}
           onChange={(e) => onPageSize(Number(e.target.value))}
-          className="rounded-lg border border-edge bg-surface2 px-2 py-1 text-ink outline-none focus:border-accent"
+          className="min-h-[36px] rounded-lg border border-edge-strong bg-surface2 px-2 py-1 text-ink transition-colors duration-fast hover:border-accent"
         >
           {PAGE_SIZES.map((n) => (
             <option key={n} value={n}>
@@ -33,28 +43,25 @@ export default function Pagination({
             </option>
           ))}
         </select>
-        <span className="ml-2">всего: {total.toLocaleString()}</span>
+        <span className="ml-2">всего: {formatCount(total)}</span>
       </div>
 
       <div className="flex items-center gap-2">
-        <button
-          onClick={() => onPage(page - 1)}
-          disabled={page <= 1}
-          className="flex items-center gap-1 rounded-lg border border-edge px-3 py-1.5 text-ink disabled:opacity-40 enabled:hover:bg-surface2"
-        >
-          <ChevronLeft size={16} /> Назад
-        </button>
-        <span className="text-muted">
-          {page} / {Math.max(totalPages, 1)}
+        <Button size="sm" onClick={() => onPage(page - 1)} disabled={page <= 1} aria-label="Предыдущая страница">
+          <ChevronLeft size={16} aria-hidden="true" /> Назад
+        </Button>
+        <span className="tabular-nums text-muted" aria-live="polite">
+          {page} / {pages}
         </span>
-        <button
+        <Button
+          size="sm"
           onClick={() => onPage(page + 1)}
           disabled={page >= totalPages}
-          className="flex items-center gap-1 rounded-lg border border-edge px-3 py-1.5 text-ink disabled:opacity-40 enabled:hover:bg-surface2"
+          aria-label="Следующая страница"
         >
-          Вперёд <ChevronRight size={16} />
-        </button>
+          Вперёд <ChevronRight size={16} aria-hidden="true" />
+        </Button>
       </div>
-    </div>
+    </nav>
   )
 }

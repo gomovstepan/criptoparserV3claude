@@ -8,6 +8,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from auth import get_current_user
+from routers.pnl_sql import PNL_EVENTS
 from shared.db import get_db_pool
 
 router = APIRouter(prefix="/api/v1", tags=["stats"])
@@ -27,7 +28,10 @@ async def get_stats(_user: str = Depends(get_current_user)) -> dict:
             + (SELECT COALESCE(sum(change_amount), 0) FROM balance WHERE reason = 'rebalance' AND time >= date_trunc('day', now()))
             AS pnl_today,
           (SELECT count(*) FROM opportunities WHERE time > now() - interval '5 minutes')         AS active_opportunities,
-          (SELECT COALESCE(max(net_spread_pct), 0) FROM opportunities WHERE time > now() - interval '1 hour') AS best_spread
+          -- Честный net (gross − taker-комиссии обеих ног), как в Opportunities UI.
+          -- net_spread_pct display-only: завышает комиссию вывода ~40x.
+          (SELECT COALESCE(max(gross_spread_pct - buy_fee_pct - sell_fee_pct), 0)
+           FROM opportunities WHERE time > now() - interval '1 hour') AS best_spread
         """
     )
     return {
@@ -45,11 +49,13 @@ async def get_pnl_series(
     _user: str = Depends(get_current_user),
 ) -> dict:
     pool = await get_db_pool()
+    # Серия обязана считать P&L так же, как KPI выше: сделки + движения ребаланса
+    # (см. routers/pnl_sql.py). Иначе последняя точка графика расходится с числом
+    # над ним. Бакет остаётся часовым и включает часы, где была только комиссия.
     rows = await pool.fetch(
-        """
-        SELECT time_bucket('1 hour', time) AS bucket, COALESCE(sum(net_pnl), 0) AS pnl
-        FROM trades
-        WHERE time > now() - make_interval(hours => $1)
+        f"""
+        SELECT time_bucket('1 hour', time) AS bucket, COALESCE(sum(pnl), 0) AS pnl
+        FROM ({PNL_EVENTS.format(window="make_interval(hours => $1)")}) AS pnl_events
         GROUP BY bucket ORDER BY bucket
         """,
         hours,

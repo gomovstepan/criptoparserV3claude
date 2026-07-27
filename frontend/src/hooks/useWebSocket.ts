@@ -59,7 +59,24 @@ export function useWebSocket() {
           } else if (msg.channel === 'trades') {
             store.addTrade(normalizeTrade(msg.data))
           } else if (msg.channel === 'prices' && Array.isArray(msg.data)) {
-            store.markSeen(msg.data.map((p: { exchange: string }) => p.exchange))
+            const items = msg.data as {
+              exchange: string
+              symbol: string
+              bid: number
+              ask: number
+              ts?: number
+            }[]
+            // Возраст тика считаем в СЕРВЕРНЫХ часах (msg.now - ts) и
+            // пересаживаем на часы клиента: прямое сравнение ts с Date.now()
+            // ломалось бы от дрейфа часов браузера/контейнера (>15с — и все
+            // цены навсегда «устаревшие»). Срез накопительный, поэтому живость
+            // биржи определяется только свежими тиками.
+            const serverNow = typeof msg.now === 'number' ? msg.now : undefined
+            const clientNow = Date.now()
+            const age = (ts?: number) =>
+              ts !== undefined && serverNow !== undefined ? Math.max(0, serverNow - ts) : 0
+            store.markSeen(items.filter((p) => age(p.ts) < 15_000).map((p) => p.exchange))
+            store.updatePrices(items.map((p) => ({ ...p, ts: clientNow - age(p.ts) })))
           }
         } catch {
           /* игнорируем некорректные сообщения */
@@ -68,6 +85,10 @@ export function useWebSocket() {
 
       ws.onclose = () => {
         clearTimers()
+        // Призрак от прошлого mount'а (StrictMode размонтирует и монтирует
+        // повторно): его onclose не должен ни трогать статус, ни планировать
+        // reconnect — иначе живут два параллельных сокета.
+        if (ws !== wsRef.current) return
         useDashboardStore.getState().setWsStatus('disconnected')
         if (closedRef.current) return
         const delay = Math.min(MAX_BACKOFF_MS, 1000 * 2 ** attemptRef.current)
@@ -84,7 +105,9 @@ export function useWebSocket() {
       closedRef.current = true
       clearTimers()
       if (timerRef.current) window.clearTimeout(timerRef.current)
-      wsRef.current?.close()
+      const ws = wsRef.current
+      wsRef.current = null // onclose закрываемого сокета увидит несовпадение и замолчит
+      ws?.close()
     }
   }, [])
 }

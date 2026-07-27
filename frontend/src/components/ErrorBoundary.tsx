@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { AlertTriangle, RotateCcw } from 'lucide-react'
+import Button from './Button'
 
 interface Props {
   children: ReactNode
@@ -25,24 +26,27 @@ export default class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.error) {
       return (
-        <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 text-center">
+        <div
+          role="alert"
+          className="flex min-h-[60vh] flex-col items-center justify-center gap-4 px-4 text-center"
+        >
           <span className="flex h-12 w-12 items-center justify-center rounded-full bg-danger/15 text-danger">
-            <AlertTriangle size={22} />
+            <AlertTriangle size={22} aria-hidden="true" />
           </span>
           <div>
             <h2 className="text-lg font-semibold text-ink">Что-то пошло не так</h2>
-            <p className="mt-1 max-w-md text-sm text-muted">{this.state.error.message}</p>
+            <p className="mt-1 max-w-md break-words text-sm text-muted">{this.state.error.message}</p>
           </div>
-          <button
+          <Button
+            variant="primary"
             onClick={() => {
               this.setState({ error: null })
               window.location.reload()
             }}
-            className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-page transition-opacity hover:opacity-90"
           >
-            <RotateCcw size={15} />
+            <RotateCcw size={15} aria-hidden="true" />
             Перезагрузить
-          </button>
+          </Button>
         </div>
       )
     }

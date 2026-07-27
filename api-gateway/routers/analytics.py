@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from auth import get_current_user
+from routers.pnl_sql import PNL_EVENTS
 from shared.db import get_db_pool
 
 router = APIRouter(prefix="/api/v1", tags=["analytics"])
@@ -48,14 +49,16 @@ async def analytics_pnl(
         days,
     )
 
+    # Дневная серия считает net_pnl по тому же определению, что и total_net_pnl
+    # ниже: сделки + движения ребаланса (routers/pnl_sql.py). Счётчик сделок и
+    # gross_pnl остаются только по сделкам — ребаланс это не сделка.
     rows = await pool.fetch(
-        """
-        SELECT time_bucket('1 day', time) AS day,
-               count(*)                    AS trades,
-               COALESCE(sum(net_pnl), 0)   AS net_pnl,
-               COALESCE(sum(gross_pnl), 0) AS gross_pnl
-        FROM trades
-        WHERE time > now() - make_interval(days => $1)
+        f"""
+        SELECT time_bucket('1 day', time)          AS day,
+               count(*) FILTER (WHERE is_trade)    AS trades,
+               COALESCE(sum(pnl), 0)               AS net_pnl,
+               COALESCE(sum(gross_pnl), 0)         AS gross_pnl
+        FROM ({PNL_EVENTS.format(window="make_interval(days => $1)")}) AS pnl_events
         GROUP BY day ORDER BY day
         """,
         days,

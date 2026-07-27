@@ -765,7 +765,9 @@ status=healthy, tg=True
 2. Integration тест: collector -> Redis -> scanner -> opportunity
 3. API тесты: все REST endpoints с JWT
 4. `README.md` — инструкция по запуску
-5. `docker-compose.prod.yml` — production overrides
+5. ~~`docker-compose.prod.yml` — production overrides~~ — реализовано иначе:
+   прод-настройки встроены в `docker-compose.yml` (якорь `x-prod-defaults`),
+   а мониторинг вынесен в `docker-compose.monitoring.yml`
 6. `monitoring/grafana-dashboard.json` — dashboard для импорта
 7. Обновить `.env.example` с описанием всех переменных
 
@@ -1583,7 +1585,7 @@ networks:
 ```
 .
 ├── docker-compose.yml
-├── docker-compose.prod.yml
+├── docker-compose.monitoring.yml
 ├── .env
 ├── .env.example
 ├── .gitignore
@@ -1636,7 +1638,8 @@ networks:
 │   ├── main.py
 │   ├── bot.py                  # aiogram router + commands
 │   ├── formatter.py            # Message formatting
-│   └── queue.py                # TelegramQueue with rate limiting
+│   └── tg_queue.py            # TelegramQueue with rate limiting (НЕ queue.py —
+│                              #   затенил бы стандартный модуль queue)
 │
 ├── frontend/
 │   ├── Dockerfile

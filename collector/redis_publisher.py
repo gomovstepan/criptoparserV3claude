@@ -47,6 +47,16 @@ class RedisPublisher:
             ex=DEPTH_TTL_SEC,
         )
 
+    async def delete_depth(self, exchange: str, symbols: list[str]) -> None:
+        """Удалить depth-ключи биржи (при вотчдог-реконнекте).
+
+        Scanner/executor мгновенно видят отсутствие книги вместо того, чтобы
+        дожидаться истечения TTL по заведомо мёртвым данным.
+        """
+        assert self._redis is not None, "RedisPublisher не подключён"
+        if symbols:
+            await self._redis.delete(*[depth_key(exchange, s) for s in symbols])
+
     async def ping(self) -> bool:
         if self._redis is None:
             return False

@@ -189,7 +189,10 @@ services:
       api-gateway:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:80/"]
+      # 127.0.0.1, а не localhost: busybox-wget сначала резолвит localhost в ::1,
+      # а nginx слушает только IPv4 (`listen 80;`) — проверка всегда падала
+      # с "Connection refused", и контейнер вечно висел unhealthy при работающем сайте.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/"]
       interval: 10s
       timeout: 5s
       retries: 3

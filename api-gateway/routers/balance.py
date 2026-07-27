@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -36,15 +37,29 @@ async def get_balance(_user: str = Depends(get_current_user)) -> dict:
 
 
 class BalanceUpdate(BaseModel):
-    """Карта `биржа → новая сумма USDT`. Принимаются только известные биржи."""
+    """Карта `биржа → новая сумма USDT`. Принимаются только известные биржи.
 
-    balances: dict[str, float] = Field(..., min_length=1)
+    ``allow_inf_nan=False``: JSON ``NaN`` проходит json.loads, обходит проверку
+    ``v < 0`` (сравнение с NaN всегда False) и валит ``Decimal(str(v))`` ниже
+    необработанным 500 — отсекаем его нормальным 422 на валидации.
+    """
+
+    balances: dict[str, Annotated[float, Field(allow_inf_nan=False)]] = Field(..., min_length=1)
 
 
-# NUMERIC(18,8) ⇒ |value| < 10^10. Балансы за этой границей не помещаются в
-# колонку `amount` и роняют COPY уже ПОСЛЕ записи в Redis — поэтому отсекаем их
-# валидацией до каких-либо изменений.
+# NUMERIC(28,8) ⇒ |value| < 10^20, но операционного смысла в балансах такого
+# порядка нет — оставляем прежний потолок 1e10 как санитарную границу ввода.
 COL_MAX = Decimal("1e10")
+
+# Атомарный swap: прочитать прежний баланс и записать новый ОДНОЙ операцией.
+# Раздельные HGET→HSET оставляли окно, в котором HINCRBYFLOAT executor'а
+# (движение сделки) молча затирался абсолютной записью оператора, а
+# change_amount в ledger'е считался от устаревшего прежнего значения.
+_SWAP_LUA = """
+local prev = redis.call('HGET', KEYS[1], ARGV[1])
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+return prev
+"""
 
 
 @router.put("/balance")
@@ -73,9 +88,8 @@ async def set_balances(
     updated: dict[str, float] = {}
     for exchange, amount in payload.balances.items():
         key = f"balance:{exchange}"
-        prev = await r.hget(key, "USDT")
+        prev = await r.eval(_SWAP_LUA, 1, key, "USDT", repr(float(amount)))
         prev_f = float(prev) if prev is not None else 0.0
-        await r.hset(key, "USDT", repr(float(amount)))
         # Если предыдущий баланс был мусором (e.g. из старого прогона), разница
         # может не поместиться в колонку change_amount — тогда пишем NULL.
         change_dec: Decimal | None = Decimal(str(float(amount) - prev_f))

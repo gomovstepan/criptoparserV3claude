@@ -21,7 +21,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Gauge, generate_latest
 from dedup import OpportunityDedup
 from shared.config import settings
 from shared.db import close_db_pool, get_db_pool
-from shared.depth import DEPTH_MAX_AGE_MS, depth_key, is_fresh, parse_depth
+from shared.depth import depth_key, is_fresh, parse_depth
 from shared.logging_config import setup_logging
 from shared.models import Opportunity
 from shared.redis_utils import wait_until_ready
@@ -37,6 +37,9 @@ GROUP = "scanner-cg"
 CONSUMER = "scanner-1"
 OPP_MAXLEN = 10_000
 MIN_SPREAD_REFRESH_SEC = 10
+# In-memory котировка старше этого — мусор: биржа отвалилась, её замёрзшая
+# цена не должна участвовать в расчёте спредов (и порождать фантомы).
+PRICE_MAX_AGE_MS = 5_000
 
 _OPP_COLUMNS = [
     "time", "id", "symbol", "buy_exchange", "sell_exchange", "buy_price",
@@ -51,9 +54,11 @@ _state: dict = {
     "redis": None,
     "pool": None,
     "dedup": None,
-    "prices": {},                # symbol -> exchange -> {"bid":.., "ask":..}
+    "prices": {},                # symbol -> exchange -> {"bid":.., "ask":.., "ts":..}
     "min_spread": 0.30,
+    "min_net_spread": 0.10,
     "estimated_notional": 1000.0,
+    "depth_max_age_ms": 3000.0,  # порог свежести глубины ДЛЯ СКАНЕРА (см. settings)
     "spreads_calculated": 0,
     "opportunities_found": 0,
     "started_at": 0.0,
@@ -71,20 +76,31 @@ async def _ensure_group(r: redis.Redis) -> None:
             raise
 
 
+# settings-ключ → ключ _state (перечитываются каждые MIN_SPREAD_REFRESH_SEC).
+_SCANNER_SETTINGS = {
+    "min_spread_pct": "min_spread",
+    "min_net_spread_pct": "min_net_spread",
+    "estimated_trade_notional": "estimated_notional",
+    "depth_max_age_ms_scanner": "depth_max_age_ms",
+}
+
+
 async def _refresh_min_spread() -> None:
-    """Периодически перечитывать min_spread_pct и estimated_trade_notional из таблицы settings."""
+    """Периодически перечитывать пороги сканера из таблицы settings.
+
+    Парсинг терпимый: битое значение оставляет прежнее, а не роняет сервис.
+    """
     while _state["running"]:
         try:
-            row = await _state["pool"].fetchval(
-                "SELECT value FROM settings WHERE key = 'min_spread_pct'"
+            rows = await _state["pool"].fetch(
+                "SELECT key, value FROM settings WHERE key = ANY($1::text[])",
+                list(_SCANNER_SETTINGS),
             )
-            if row is not None:
-                _state["min_spread"] = float(str(row).strip('"'))
-            notional_row = await _state["pool"].fetchval(
-                "SELECT value FROM settings WHERE key = 'estimated_trade_notional'"
-            )
-            if notional_row is not None:
-                _state["estimated_notional"] = float(str(notional_row).strip('"'))
+            for row in rows:
+                try:
+                    _state[_SCANNER_SETTINGS[row["key"]]] = float(str(row["value"]).strip('"'))
+                except (TypeError, ValueError):
+                    continue
         except Exception as err:  # noqa: BLE001
             log.warning("settings_refresh_failed", error=str(err))
         await asyncio.sleep(MIN_SPREAD_REFRESH_SEC)
@@ -103,8 +119,13 @@ def _opp_record(opp: Opportunity) -> tuple:
 
 async def _publish_and_store(opps: list[Opportunity]) -> None:
     r: redis.Redis = _state["redis"]
+    dedup: OpportunityDedup = _state["dedup"]
     for opp in opps:
         await r.xadd(OPPORTUNITIES_STREAM, opp.to_redis(), maxlen=OPP_MAXLEN, approximate=True)
+        # Отметка сразу после XADD (а не после COPY): публикация в стрим —
+        # то, что дедуплицируется. Иначе падение COPY при живом стриме
+        # перепубликовывало бы те же возможности каждый тик без троттлинга.
+        await dedup.mark(opp)
     records = [_opp_record(o) for o in opps]
     await _state["pool"].copy_records_to_table("opportunities", records=records, columns=_OPP_COLUMNS)
 
@@ -120,42 +141,59 @@ async def _scan_loop() -> None:
             if not resp:
                 continue
             _, entries = resp[0]
+            now_ms = int(time.time() * 1000)
             updated: set[str] = set()
             ids = []
             for msg_id, f in entries:
                 ids.append(msg_id)
                 try:
                     sym, ex = f["symbol"], f["exchange"]
-                    prices.setdefault(sym, {})[ex] = {"bid": float(f["bid"]), "ask": float(f["ask"])}
+                    try:
+                        ts = int(f["received_at"])
+                    except (KeyError, ValueError):
+                        ts = now_ms
+                    prices.setdefault(sym, {})[ex] = {
+                        "bid": float(f["bid"]), "ask": float(f["ask"]), "ts": ts,
+                    }
                     updated.add(sym)
                 except (KeyError, ValueError):
                     continue
 
             found: list[Opportunity] = []
-            now_ms = int(time.time() * 1000)
             for sym in updated:
                 book = prices[sym]
+                # Выселяем замёрзшие котировки: отвалившаяся биржа не должна
+                # вечно участвовать в спредах последней увиденной ценой.
+                for ex in [e for e, q in book.items()
+                           if now_ms - q.get("ts", 0) > PRICE_MAX_AGE_MS]:
+                    del book[ex]
                 n = len(book)
                 _state["spreads_calculated"] += n * (n - 1)
                 keys = [depth_key(ex, sym) for ex in book]
                 raws = await r.mget(keys) if keys else []
                 depth_by_ex: dict[str, dict] = {}
-                for ex, raw in zip(book.keys(), raws):
+                for ex, raw in zip(book.keys(), raws, strict=True):
                     parsed = parse_depth(raw)
-                    if is_fresh(parsed, now_ms, DEPTH_MAX_AGE_MS):
+                    if is_fresh(parsed, now_ms, _state["depth_max_age_ms"]):
                         depth_by_ex[ex] = parsed
                 for opp in calculate_spreads(
                     sym, book, _state["min_spread"], _state["estimated_notional"],
                     depth=depth_by_ex,
+                    min_net_spread_pct=_state["min_net_spread"],
                 ):
-                    if await dedup.is_new(opp):
+                    if not await dedup.seen(opp):
                         found.append(opp)
 
-            if found:
-                await _publish_and_store(found)
-                _state["opportunities_found"] += len(found)
-            if ids:
-                await r.xack(PRICES_STREAM, GROUP, *ids)
+            try:
+                if found:
+                    await _publish_and_store(found)
+                    _state["opportunities_found"] += len(found)
+            finally:
+                # ACK в finally: без него сообщения упавшего батча оседали бы
+                # в PEL навсегда (читаем только ">", реклейма нет), а потеря
+                # тика цены безвредна — следующий придёт через мгновение.
+                if ids:
+                    await r.xack(PRICES_STREAM, GROUP, *ids)
         except asyncio.CancelledError:
             raise
         except Exception as err:  # noqa: BLE001
@@ -214,6 +252,8 @@ async def health() -> dict:
         "opportunities_found_total": _state["opportunities_found"],
         "opportunities_found_last_hour": int(last_hour or 0),
         "min_spread_pct": _state["min_spread"],
+        "min_net_spread_pct": _state["min_net_spread"],
+        "depth_max_age_ms_scanner": _state["depth_max_age_ms"],
         "redis_connected": redis_ok,
     }
 

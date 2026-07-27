@@ -42,17 +42,29 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 CREATE INDEX IF NOT EXISTS idx_settings_key ON settings (key);
 
+-- ВНИМАНИЕ: не все ключи ниже читаются сервисами.
+--   slippage_tolerance_pct, execution_timeout_sec — legacy: не читаются никем
+--     (slippage теперь выводится из прохода по стакану, таймаута исполнения нет);
+--   daily_loss_limit_pct — нереализованное требование ТЗ (E-014), читателей нет;
+--   kill_switch — legacy: живой флаг — ключ Redis `executor:kill_switch`,
+--     эта строка не читается и не пишется. Не подключайте к ней логику.
+-- Строки сохранены, чтобы existing-БД и fresh-БД имели одинаковый набор ключей.
 INSERT INTO settings (key, value, description) VALUES
-('min_spread_pct', '0.30', 'Minimum spread % to trigger opportunity'),
+('min_spread_pct', '0.30', 'Minimum GROSS spread % to trigger opportunity'),
 ('max_position_pct', '10.00', 'Max % of balance per trade'),
-('slippage_tolerance_pct', '0.20', 'Slippage tolerance %'),
-('execution_timeout_sec', '2', 'Max execution time in seconds'),
-('kill_switch', 'false', 'Emergency stop flag'),
+('slippage_tolerance_pct', '0.20', 'LEGACY, not read by any service'),
+('execution_timeout_sec', '2', 'LEGACY, not read by any service'),
+('kill_switch', 'false', 'LEGACY, live flag is Redis key executor:kill_switch'),
 ('notification_spread_threshold', '0.50', 'Min spread % for Telegram alert'),
 ('notification_trade_min_pnl', '5.00', 'Min |net P&L| USDT to alert a trade in Telegram'),
-('daily_loss_limit_pct', '5.00', 'Daily loss limit % - stop trading'),
+('daily_loss_limit_pct', '5.00', 'UNIMPLEMENTED (TZ E-014), not read by any service'),
 ('estimated_trade_notional', '1000.00', 'Estimated trade notional USD for spread fee calculation'),
-('rebalance_threshold_usd', '100.00', 'Balance threshold (USDT) triggering rebalance from richest exchange')
+('rebalance_threshold_usd', '100.00', 'Balance threshold (USDT) triggering rebalance from richest exchange'),
+('min_profit_usd', '0.00', 'Executor profitability gate: skip trade when net_pnl below this (USDT)'),
+('loss_cooldown_sec', '60', 'Cooldown (sec) for a (symbol, buy, sell) config after an unprofitable evaluation; 0 disables'),
+('min_net_spread_pct', '0.10', 'Scanner filter: min spread % net of both taker fees (withdrawal excluded by ledger model)'),
+('depth_max_age_ms_executor', '2000', 'Max depth snapshot age (ms) the executor will trade on'),
+('depth_max_age_ms_scanner', '3000', 'Max depth snapshot age (ms) the scanner will price on')
 ON CONFLICT (key) DO NOTHING;
 
 
@@ -75,11 +87,11 @@ CREATE TABLE IF NOT EXISTS exchange_configs (
 INSERT INTO exchange_configs
     (exchange, maker_fee_pct, taker_fee_pct, withdrawal_btc, withdrawal_usdt, rate_limit_req_per_sec) VALUES
 ('bybit',   0.10, 0.10, 0.000085, 1.0, 50),
-('binance', 0.10, 0.10, 0.0005,   0.0, 1200),
-('kucoin',  0.10, 0.10, 0.0,      0.0, 200),
-('gateio',  0.30, 0.30, 0.001,    1.0, 200),
-('bitget',  0.10, 0.10, 0.0003,   1.0, 20),
-('coinex',  0.20, 0.20, 0.0001,   1.0, 10),
+('binance', 0.10, 0.10, 0.0005,   1.5, 1200),
+('kucoin',  0.10, 0.10, 0.0,      1.5, 200),
+('gateio',  0.10, 0.10, 0.001,    1.0, 200),
+('bitget',  0.10, 0.10, 0.0003,   1.5, 20),
+('coinex',  0.20, 0.20, 0.0001,   1.7, 10),
 ('bingx',   0.10, 0.10, 0.00035,  1.0, 24)
 ON CONFLICT (exchange) DO NOTHING;
 
@@ -200,13 +212,19 @@ CREATE TABLE IF NOT EXISTS trades (
     sell_exchange   VARCHAR(20) NOT NULL,
     buy_price       DECIMAL(18,8) NOT NULL,
     sell_price      DECIMAL(18,8) NOT NULL,
-    amount          DECIMAL(18,8) NOT NULL,
+    -- 28,8: amount = notional/price; мемкоины с ценой ~1e-6 при больших
+    -- балансах дают объёмы за пределами 18,8 (см. migrate-volume-precision).
+    amount          DECIMAL(28,8) NOT NULL,
     buy_fee         DECIMAL(18,8) NOT NULL DEFAULT 0,
     sell_fee        DECIMAL(18,8) NOT NULL DEFAULT 0,
     withdrawal_fee  DECIMAL(18,8) NOT NULL DEFAULT 0,
     slippage_cost   DECIMAL(18,8) NOT NULL DEFAULT 0,
     gross_pnl       DECIMAL(18,8) NOT NULL,
     net_pnl         DECIMAL(18,8) NOT NULL,
+    -- Top-of-book обеих ног на момент исполнения: без них gross/slippage
+    -- неразложимы постфактум (см. executor/pnl.py).
+    buy_top_ask     DECIMAL(18,8),
+    sell_top_bid    DECIMAL(18,8),
     status          VARCHAR(20) NOT NULL DEFAULT 'pending',
     executed_at     TIMESTAMPTZ,
     duration_ms     INTEGER,
@@ -234,9 +252,9 @@ CREATE TABLE IF NOT EXISTS balance (
     time            TIMESTAMPTZ NOT NULL,
     exchange        VARCHAR(20) NOT NULL,
     asset           VARCHAR(10) NOT NULL DEFAULT 'USDT',
-    amount          DECIMAL(18,8) NOT NULL,
+    amount          DECIMAL(28,8) NOT NULL,
     trade_id        VARCHAR(100),
-    change_amount   DECIMAL(18,8),
+    change_amount   DECIMAL(28,8),
     reason          VARCHAR(50) NOT NULL DEFAULT 'trade',
     CONSTRAINT balance_positive CHECK (amount >= 0),
     CONSTRAINT balance_reason_check CHECK (reason IN ('trade', 'deposit', 'withdrawal', 'adjustment', 'initial', 'rebalance'))

@@ -28,8 +28,14 @@ export default function NetworkStatus() {
     : 'Соединение с сервером потеряно — переподключаемся…'
 
   return (
-    <div className="flex items-center justify-center gap-2 bg-danger/90 px-4 py-1.5 text-center text-xs font-medium text-white">
-      <WifiOff size={14} />
+    // role=status + aria-live: сообщение озвучивается, но не крадёт фокус.
+    // text-on-danger вместо text-white: белый на #EF4444 давал 3.8:1 в тёмной теме.
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex shrink-0 items-center justify-center gap-2 bg-danger px-4 py-1.5 text-center text-xs font-medium text-on-danger"
+    >
+      <WifiOff size={14} aria-hidden="true" />
       {text}
     </div>
   )

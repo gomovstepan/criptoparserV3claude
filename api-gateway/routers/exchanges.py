@@ -4,12 +4,15 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Body, Depends, HTTPException
-from pydantic import BaseModel
+import structlog
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 
 from auth import get_current_user
 from shared.config import EXCHANGES
 from shared.db import get_db_pool
+
+log = structlog.get_logger()
 
 router = APIRouter(prefix="/api/v1", tags=["exchanges"])
 
@@ -18,23 +21,35 @@ CONNECTED_THRESHOLD_SEC = 15
 
 @router.get("/exchanges")
 async def get_exchanges(_user: str = Depends(get_current_user)) -> dict:
+    """Список бирж: is_active из БД, комиссии — из shared/config.py.
+
+    Вся математика (scanner, executor) читает константы ``EXCHANGES``; колонки
+    комиссий в ``exchange_configs`` — лишь сид первого запуска, который никем
+    не обновляется. Раньше страница показывала значения из БД: правка комиссии
+    в ``shared/config.py`` меняла все спреды на Opportunities, а Exchanges вечно
+    отображала старый сид. Теперь витрина и математика физически не могут
+    разойтись. Из БД остаётся только ``is_active`` — единственная колонка,
+    которой реально управляют (PATCH ниже).
+    """
     pool = await get_db_pool()
-    rows = await pool.fetch(
-        "SELECT exchange, is_active, maker_fee_pct, taker_fee_pct, withdrawal_btc, "
-        "withdrawal_usdt, rate_limit_req_per_sec FROM exchange_configs ORDER BY id"
-    )
-    items = [
-        {
-            "exchange": r["exchange"],
+    rows = await pool.fetch("SELECT exchange, is_active FROM exchange_configs ORDER BY id")
+    items = []
+    for r in rows:
+        cfg = EXCHANGES.get(r["exchange"])
+        if cfg is None:
+            # Строка есть в БД, но системе биржа неизвестна (ручной INSERT):
+            # торговать ей collector/scanner всё равно не могут — не показываем.
+            log.warning("exchange_row_unknown", exchange=r["exchange"])
+            continue
+        items.append({
+            "exchange": cfg.name,
             "is_active": r["is_active"],
-            "maker_fee_pct": float(r["maker_fee_pct"]),
-            "taker_fee_pct": float(r["taker_fee_pct"]),
-            "withdrawal_btc": float(r["withdrawal_btc"]) if r["withdrawal_btc"] is not None else None,
-            "withdrawal_usdt": float(r["withdrawal_usdt"]) if r["withdrawal_usdt"] is not None else None,
-            "rate_limit_req_per_sec": r["rate_limit_req_per_sec"],
-        }
-        for r in rows
-    ]
+            "maker_fee_pct": cfg.maker_fee_pct,
+            "taker_fee_pct": cfg.taker_fee_pct,
+            "withdrawal_btc": cfg.withdrawal_btc,
+            "withdrawal_usdt": cfg.withdrawal_usdt,
+            "rate_limit_req_per_sec": cfg.rate_limit_req_per_sec,
+        })
     return {"items": items, "total": len(items)}
 
 
@@ -109,15 +124,59 @@ async def get_settings(_user: str = Depends(get_current_user)) -> dict:
     return {r["key"]: _parse_setting(r["value"]) for r in rows}
 
 
+class SettingsUpdate(BaseModel):
+    """Допустимые ключи `settings` и их границы (ТЗ, раздел 6.3.4).
+
+    ``extra="forbid"`` — неизвестный ключ теперь 422, а не молчаливый no-op:
+    раньше опечатка в имени ключа возвращала ``{"status": "updated"}``, ничего
+    не изменив. Все поля Optional: форма шлёт объект целиком, а PATCH-семантика
+    (обновляем только присланное) сохраняется через ``exclude_unset``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Только ключи, которые какой-то сервис реально читает. Бывшие мёртвые
+    # настройки (slippage_tolerance_pct, execution_timeout_sec,
+    # daily_loss_limit_pct) удалены и отсюда, и из формы (types.ts
+    # SETTING_FIELDS) одновременно — их строки в таблице settings остаются как
+    # legacy-сиды, но через API больше не изменяются.
+    min_spread_pct: float | None = Field(None, ge=0.01, le=10.0)
+    # ТЗ допускает le=100.0, но при 100% стоимость покупки вместе с комиссией
+    # превышает баланс: Redis уходит в минус, а строка в hypertable клампится
+    # до 0 (paper_trading.py) — Redis и БД начинают противоречить друг другу.
+    # Поэтому потолок ниже спецификации.
+    max_position_pct: float | None = Field(None, ge=1.0, le=50.0)
+    notification_spread_threshold: float | None = Field(None, ge=0.01, le=10.0)
+    notification_trade_min_pnl: float | None = Field(None, ge=0.0, le=1_000_000.0)
+    estimated_trade_notional: float | None = Field(None, ge=1.0, le=10_000_000.0)
+    rebalance_threshold_usd: float | None = Field(None, ge=0.0, le=10_000_000.0)
+    # Гейты сейфти (этап «остановить убытки»). min_profit_usd допускает
+    # отрицательные значения сознательно: в paper-режиме оператор может
+    # временно разрешить мелкие минусы, чтобы наблюдать поток сделок.
+    min_profit_usd: float | None = Field(None, ge=-1_000.0, le=1_000_000.0)
+    loss_cooldown_sec: float | None = Field(None, ge=0.0, le=86_400.0)
+    min_net_spread_pct: float | None = Field(None, ge=0.0, le=10.0)
+    depth_max_age_ms_executor: float | None = Field(None, ge=500.0, le=60_000.0)
+    depth_max_age_ms_scanner: float | None = Field(None, ge=500.0, le=60_000.0)
+
+
 @router.put("/settings")
 async def update_settings(
-    payload: dict = Body(...),
+    payload: SettingsUpdate,
     _user: str = Depends(get_current_user),
 ) -> dict:
+    """Обновить настройки. Возвращает реально изменённые ключи, а не эхо запроса."""
+    values = payload.model_dump(exclude_unset=True, exclude_none=True)
     pool = await get_db_pool()
-    for key, value in payload.items():
-        await pool.execute(
+    updated: dict = {}
+    for key, value in values.items():
+        status = await pool.execute(
             "UPDATE settings SET value = $1::jsonb, updated_at = now() WHERE key = $2",
             json.dumps(value), key,
         )
-    return {"status": "updated", "settings": payload}
+        # asyncpg возвращает "UPDATE N" — 0 означает, что строки в таблице нет
+        # (например, БД поднята из старого init-db.sql без этого ключа).
+        if status and status.split()[-1] != "0":
+            updated[key] = value
+    missing = sorted(set(values) - set(updated))
+    return {"status": "updated", "settings": updated, "not_found": missing}

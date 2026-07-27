@@ -29,11 +29,16 @@ real-time дашборд. Backend — Python-микросервисы на FastA
 | executor | 8003 | Paper-trading: симуляция сделок, P&L, виртуальные балансы, kill switch |
 | notifier | 8004 | Telegram-бот (aiogram): алерты по сделкам/спредам, команды |
 | api-gateway | 8000 | REST `/api/v1/*` + WebSocket `/ws` + JWT + CORS + `/metrics` + Swagger `/docs` |
-| frontend | 5173 | React 19 дашборд (Vite dev) |
+| frontend | 5173 | React 19 дашборд (в контейнере — nginx, проксирует `/api` и `/ws` на api-gateway) |
 | timescaledb | 5432 | Хранилище временных рядов (PostgreSQL 18 + TimescaleDB) |
 | redis | 6379 | Streams (шина) + балансы + kill switch + дедуп |
-| prometheus | 9090 | Сбор метрик (prod-профиль) |
-| grafana | 3000 | Дашборды метрик (prod-профиль) |
+| prometheus | 9090 | Сбор метрик (стек мониторинга) |
+| grafana | 3000 | Дашборды метрик и логов (стек мониторинга) |
+| loki | 3100 | Хранилище логов, наполняется Promtail (стек мониторинга) |
+
+Наружу публикуются только **8000** (api-gateway) и **5173** (фронтенд). Порты
+8001–8004 доступны лишь внутри сети `arbitrage-net` — проверять их через
+`docker compose exec`, а не с хоста.
 
 ## Требования
 
@@ -49,7 +54,9 @@ cp .env.example .env
 #   как минимум задать: POSTGRES_PASSWORD, JWT_SECRET (≥32 символов),
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
-# 2. Поднять backend-стек (БД, Redis, 5 микросервисов)
+# 2. Поднять стек (БД, Redis, 5 микросервисов, фронтенд).
+#    Прод-настройки — restart-политика, ротация docker-логов, лимиты ресурсов —
+#    уже встроены в базовый файл через якорь x-prod-defaults.
 docker compose up -d --build
 
 # 3. Проверить здоровье
@@ -66,6 +73,10 @@ cd frontend
 npm install --legacy-peer-deps   # React 19 → peer-конфликты, нужен флаг
 npm run dev                       # http://localhost:5173
 ```
+
+Никаких env-файлов для фронтенда заводить не нужно: `vite.config.ts` проксирует
+`/api` и `/ws` на `localhost:8000` — ровно так же, как это делает nginx в
+контейнере. Поэтому api-gateway должен быть поднят (`docker compose up -d`).
 
 > Порт **5173** обязателен — он прописан в `CORS_ORIGINS` api-gateway.
 
@@ -84,44 +95,59 @@ docker compose up -d            # сервисы должны быть запу�
 pwsh tests/run-tests.ps1
 ```
 
-Покрытие:
+Покрытие (6 наборов):
 - `test_spread_calculator.py` — формулы спреда scanner'а (gross/net, комиссии, фильтр)
-- `test_pnl_calculator.py` — расчёт P&L executor'а (slippage, комиссии, убыток)
+- `test_depth.py` — VWAP-проход по стакану (`shared/depth.py`), свежесть глубины
+- `test_pnl_calculator.py` — формула P&L executor'а (`pnl.settle_trade`)
+- `test_paper_trading.py` — движок сделок: kill switch, пороги, тонкий стакан, дельты балансов
 - `test_api.py` — REST API gateway с JWT (login, 401, prices, trades, health)
 - `test_integration.py` — сквозной поток `prices → Redis → scanner → opportunities`
 
-Под `pytest` (если установлен) те же файлы запускаются обычным `pytest tests/`.
+Запускать их с хоста через `pytest tests/` нельзя: `test_api` и `test_integration`
+обращаются к `localhost:8000` и Redis **изнутри** контейнера api-gateway.
 
-## Production + мониторинг
+## Мониторинг
 
-Оверрайды `docker-compose.prod.yml` добавляют лимиты ресурсов, рестарт-политику,
-ротацию логов и сервисы мониторинга:
+Prometheus, Grafana, Loki и Promtail живут в отдельном compose-файле и
+подключаются к внешней сети `arbitrage-net`, поэтому основной стек должен быть
+поднят первым:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+docker compose up -d                                  # сначала основной стек
+docker compose -f docker-compose.monitoring.yml up -d  # затем мониторинг
 ```
 
 - **Prometheus** — http://localhost:9090 (скрейпит `/metrics` всех 5 сервисов)
 - **Grafana** — http://localhost:3000 (логин `admin` / `${GRAFANA_PASSWORD}`),
-  дашборд «CriptoParser V3 — Overview» и источник Prometheus подключаются автоматически.
+  дашборды «CriptoParser V3 — Overview» и «Logs», источники Prometheus и Loki
+  подключаются автоматически.
+- **Loki** — http://localhost:3100, хранит 7 дней; Promtail читает `./logs/*.log`.
 
 ## Переменные окружения
 
 Все переменные описаны в [`.env.example`](.env.example): доступы к TimescaleDB и
 Redis, порты сервисов, JWT-секрет и CORS, токен/чат Telegram, пароль Grafana,
-адреса API/WS для фронтенда. `.env` в git не коммитится.
+уровень логирования. `VITE_*` там намеренно нет — фронтенд ходит по
+относительным путям (dev-прокси в `vite.config.ts`, nginx в контейнере).
+
+> **`.env` должен быть локальным.** Он перечислен в `.gitignore`, но был
+> закоммичен раньше, чем правило появилось, — а `.gitignore` не влияет на уже
+> отслеживаемые файлы. Прежде чем класть туда настоящие секреты, выполните
+> `git rm --cached .env` и убедитесь, что он больше не в `git ls-files`.
 
 ## Структура репозитория
 
 ```
 collector/  scanner/  executor/  notifier/  api-gateway/   # микросервисы
-shared/                       # общие config/models/db (монтируется как пакет)
+shared/                       # общие config/models/db/depth/logging (монтируется как пакет)
 frontend/                     # React 19 + Vite дашборд
 scripts/init-db.sql           # схема БД + сиды (биржи, пары, настройки)
+scripts/migrate-*.sql         # миграции для уже существующей БД (init-db.sql
+                              #   выполняется только на пустом томе)
 tests/                        # тесты + run-tests.ps1
-monitoring/                   # prometheus.yml, grafana provisioning + dashboard
-docker-compose.yml            # базовый стек
-docker-compose.prod.yml       # prod-оверрайды + Prometheus/Grafana
+monitoring/                   # prometheus.yml, loki/promtail, grafana provisioning
+docker-compose.yml            # весь стек, прод-настройки встроены
+docker-compose.monitoring.yml # Prometheus + Grafana + Loki + Promtail
 ```
 
 ## Замечания
@@ -129,8 +155,17 @@ docker-compose.prod.yml       # prod-оверрайды + Prometheus/Grafana
 - **Реальные спреды малы.** Межбиржевые спреды BTC/ETH почти всегда < 0.3%, поэтому
   при дефолтном `min_spread_pct=0.30` поток opportunities близок к нулю — это
   нормально. Порог настраивается в UI (Settings) без пересборки.
-- **Paper trading.** Реальные ордера не выставляются: executor симулирует исполнение
-  со slippage 0.1–0.3% и ведёт виртуальные балансы. Kill switch (Settings) мгновенно
-  останавливает создание сделок.
+- **Paper trading.** Реальные ордера не выставляются. Executor симулирует исполнение
+  проходом по реальному стакану: покупка «съедает» asks, продажа — bids, цены сделки
+  это VWAP уровней. Проскальзывание не задаётся процентом, а получается из самой
+  книги; если глубины не хватает или она устарела (>5 с), сделка пропускается.
+  Kill switch (Settings) останавливает создание сделок.
+- **Не всякий спред станет сделкой.** Executor заново проходит по стакану в момент
+  исполнения и часто отказывается — это нормально, так отсеиваются спреды, которых
+  на реальном объёме нет.
+- **Дневной лимит убытка (ТЗ, E-014) не реализован.** Его строка в таблице
+  `settings` (вместе с legacy-ключами `slippage_tolerance_pct` и
+  `execution_timeout_sec`) осталась как сид, но из UI и API эти параметры
+  убраны — форма настроек показывает только то, что сервисы реально читают.
 - **Сеть.** Collector подключается к биржам по WebSocket — при ограничениях DNS/прокси
   биржи будут отображаться как «disconnected». Это состояние сети, не ошибка приложения.

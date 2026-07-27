@@ -562,7 +562,9 @@ curl -s -X POST http://localhost:8003/killswitch -H "Content-Type: application/j
 - `notifier/main.py` — FastAPI app + aiogram bot + background consumer
 - `notifier/bot.py` — router с командами `/start`, `/status`, `/balance`, `/trades`, `/killswitch`
 - `notifier/formatter.py` — функции форматирования сообщений спреда и сделки
-- `notifier/queue.py` — `TelegramQueue` с rate limiting через Redis List
+- `notifier/tg_queue.py` — `TelegramQueue` с rate limiting через Redis List
+  (файл НЕ может называться `queue.py`: рабочая директория первой в `sys.path`,
+  и он затенил бы стандартный модуль `queue`)
 - `.env` — добавлен `TELEGRAM_BOT_TOKEN` (получить через @BotFather)
 
 **Как запустить:**
@@ -1148,20 +1150,21 @@ status=healthy, telegram=true
 - `tests/test_integration.py` — сквозной тест потока данных
 - `tests/test_api.py` — тесты REST API
 - `README.md` — полная инструкция по установке и запуску
-- `docker-compose.prod.yml` — production overrides (limits, restart, logging)
+- ~~`docker-compose.prod.yml` — production overrides~~ — реализовано иначе:
+  limits/restart/logging встроены в `docker-compose.yml` (`x-prod-defaults`),
+  мониторинг — в `docker-compose.monitoring.yml`
 - `monitoring/grafana-dashboard.json` — dashboard для импорта в Grafana
 - `.env.example` — обновлён: все переменные с описанием
 
 **Как запустить:**
 ```bash
-# Запуск тестов
-docker-compose -f docker-compose.yml -f docker-compose.test.yml up --build tests
+# Запуск тестов — внутри уже поднятых контейнеров (stdlib unittest, без pytest).
+# docker-compose.test.yml так и не появился: тесты гоняются через docker cp.
+docker compose up -d
+pwsh tests/run-tests.ps1
 
-# Или локально (если установлен pytest)
-cd tests && pytest -v
-
-# Запуск с production конфигурацией
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# Прод-настройки встроены в базовый файл, отдельного prod-оверрайда нет
+docker compose up -d --build
 
 # Проверка логов всех сервисов
 docker-compose logs --tail=50

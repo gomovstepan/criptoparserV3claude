@@ -2,34 +2,73 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Цветовые токены как RGB-каналы (для tailwind `rgb(var() / <alpha>)`).
-   :root — тёмная тема по умолчанию; html.light переопределяет на светлую. */
+/* ═══════════════════════════════════════════════════════════════════════════
+   ДИЗАЙН-ТОКЕНЫ
+   Цвета — RGB-каналы (для tailwind `rgb(var(--c-x) / <alpha-value>)`).
+   :root — тёмная тема по умолчанию; html.light переопределяет на светлую.
+
+   Пары «фон → текст» подобраны так, чтобы контраст был ≥ 4.5:1 в ОБЕИХ темах
+   (WCAG AA). Для этого рядом с каждым «заливочным» цветом есть свой on-*:
+   в тёмной теме заливки яркие → текст тёмный; в светлой заливки тёмные →
+   текст белый. Без этого `bg-accent text-page` давал 3.0:1 в светлой теме.
+   ═══════════════════════════════════════════════════════════════════════════ */
 :root {
   color-scheme: dark;
+
+  /* Поверхности и текст */
   --c-page: 10 10 20;
   --c-surface: 18 18 31;
   --c-surface2: 26 26 46;
-  --c-edge: 37 37 64;
+  --c-edge: 37 37 64; /* декоративные границы карточек/разделители */
+  --c-edge-strong: 100 116 139; /* границы полей ввода: ≥3:1 в обеих темах */
+  --c-ink: 241 245 249;
+  --c-muted: 148 163 184;
+
+  /* Семантические цвета (используются и как текст, и как заливка) */
   --c-accent: 0 212 170;
   --c-success: 34 197 94;
   --c-danger: 239 68 68;
   --c-warning: 245 158 11;
-  --c-ink: 241 245 249;
-  --c-muted: 148 163 184;
+
+  /* Текст/иконки поверх соответствующей заливки */
+  --c-on-accent: 4 10 18;
+  --c-on-success: 4 10 18;
+  --c-on-danger: 4 10 18;
+  --c-on-warning: 4 10 18;
+
+  /* Графики (recharts не читает tailwind-классы — цвета отдаём через JS) */
+  --c-grid: 37 37 64;
+
+  /* Тайминги анимаций — единый ритм (quick-reference §7 motion-consistency) */
+  --t-fast: 120ms;
+  --t-base: 200ms;
+  --t-slow: 280ms;
 }
 
 html.light {
   color-scheme: light;
+
   --c-page: 244 246 249;
   --c-surface: 255 255 255;
   --c-surface2: 241 244 248;
-  --c-edge: 222 227 234;
-  --c-accent: 0 160 130;
-  --c-success: 22 163 74;
-  --c-danger: 220 38 38;
-  --c-warning: 217 119 6;
+  --c-edge: 203 213 225;
+  --c-edge-strong: 100 116 139;
   --c-ink: 15 23 42;
   --c-muted: 100 116 139;
+
+  /* Затемнены относительно тёмной темы: на белом фоне яркая бирюза/зелень
+     давали 3.3:1. Эти значения дают ≥4.9:1 как текст на surface. */
+  --c-accent: 0 112 92;
+  --c-success: 21 128 61;
+  --c-danger: 220 38 38;
+  --c-warning: 180 83 9;
+
+  --c-on-accent: 255 255 255;
+  --c-on-success: 255 255 255;
+  --c-on-danger: 255 255 255;
+  --c-on-warning: 255 255 255;
+
+  --c-grid: 226 232 240;
 }
 
 html,
@@ -42,11 +81,90 @@ body {
   margin: 0;
   background-color: rgb(var(--c-page));
   color: rgb(var(--c-ink));
-  font-family: Inter, system-ui, -apple-system, sans-serif;
+  /* Системный стек: шрифты не бандлятся и не тянутся из сети (система закрытая,
+     внешние CDN недоступны). JetBrains Mono/Inter подхватятся, если стоят локально. */
+  font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+@layer base {
+  /* ── Видимое кольцо фокуса для всей клавиатурной навигации ──
+     Раньше компоненты ставили `outline-none` и не давали замены — это анти-паттерн
+     №1 из чек-листа доступности. Правило живёт в base-слое, поэтому любой
+     utility-класс `outline-none` его перебьёт: таких классов в коде больше нет. */
+  :focus-visible {
+    outline: 2px solid rgb(var(--c-accent));
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Табличные цифры во всех числовых колонках — колонки не «прыгают» при обновлении */
+  .font-mono,
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Убирает 300ms задержку тапа на мобильных */
+  button,
+  a,
+  select,
+  summary,
+  [role='button'],
+  [role='switch'] {
+    touch-action: manipulation;
+  }
+
+  /* Поля ввода на мобильных: <16px вызывает авто-zoom в iOS Safari */
+  @media (max-width: 640px) {
+    input,
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
+}
+
+@layer components {
+  /* Расширяет область нажатия до 44×44 БЕЗ изменения визуальных границ —
+     штатный приём из правила touch-target-size («extend hit area if needed»). */
+  .tap-target {
+    position: relative;
+  }
+  .tap-target::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
+
+  /* Ссылка «к содержимому» — видна только при фокусе с клавиатуры */
+  .skip-link {
+    position: absolute;
+    left: 8px;
+    top: -100px;
+    z-index: 100;
+    padding: 10px 16px;
+    border-radius: 8px;
+    background: rgb(var(--c-accent));
+    color: rgb(var(--c-on-accent));
+    font-size: 14px;
+    font-weight: 600;
+    transition: top var(--t-fast) ease-out;
+  }
+  .skip-link:focus {
+    top: 8px;
+  }
 }
 
 /* Тонкий скроллбар, подстраивается под тему */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--c-edge)) transparent;
+}
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -55,12 +173,14 @@ body {
   background: rgb(var(--c-edge));
   border-radius: 4px;
 }
+::-webkit-scrollbar-track {
+  background: transparent;
+}
 
 /* Tooltip portal */
 .tooltip-portal {
   position: fixed;
-  z-index: 9999;
-  transform: translate(-50%, -100%) translateY(-8px);
+  z-index: 60;
   max-width: 280px;
   padding: 8px 12px;
   border-radius: 8px;
@@ -68,12 +188,50 @@ body {
   border: 1px solid rgb(var(--c-edge));
   color: rgb(var(--c-ink));
   font-size: 12px;
-  line-height: 1.4;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  line-height: 1.5;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.28);
   pointer-events: none;
-  animation: tooltip-in 0.15s ease-out;
+  animation: tooltip-in var(--t-fast) ease-out;
 }
 @keyframes tooltip-in {
-  from { opacity: 0; transform: translate(-50%, -100%) translateY(-4px); }
-  to   { opacity: 1; transform: translate(-50%, -100%) translateY(-8px); }
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Появление модальных слоёв: только transform/opacity — без reflow и CLS */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* ── prefers-reduced-motion ──
+   Мгновенные, но не отменённые переходы: состояния остаются считываемыми,
+   вестибулярных триггеров нет. Требование чек-листа доступности. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

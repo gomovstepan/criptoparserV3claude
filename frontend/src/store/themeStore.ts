@@ -4,10 +4,22 @@ export type Theme = 'dark' | 'light'
 
 function apply(theme: Theme) {
   const el = document.documentElement
+  // Держим оба класса в актуальном состоянии: `light` включает светлые токены,
+  // `dark` нужен варианту darkMode:'class' в tailwind. Раньше снимался только
+  // `light`, и в светлой теме на <html> оставался класс `dark`.
   el.classList.toggle('light', theme === 'light')
+  el.classList.toggle('dark', theme === 'dark')
+  el.style.colorScheme = theme
 }
 
-const initial: Theme = (localStorage.getItem('theme') as Theme) || 'dark'
+function readInitial(): Theme {
+  const stored = localStorage.getItem('theme')
+  if (stored === 'light' || stored === 'dark') return stored
+  // Первый визит — уважаем системную настройку (prefers-color-scheme)
+  return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+}
+
+const initial: Theme = readInitial()
 // Применяем сразу при загрузке модуля — до первого рендера, чтобы не мигало.
 apply(initial)
 

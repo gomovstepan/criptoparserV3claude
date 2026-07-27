@@ -33,6 +33,9 @@ DEFAULT_SYMBOLS = ["BTC/USDT"]
 # ── Prometheus ──
 _ws_connections_gauge = Gauge("ws_connections_active", "Активные WS-соединения по биржам")
 _ws_messages_gauge = Gauge("ws_messages_total", "Всего опубликовано тиков")
+_ws_watchdog_gauge = Gauge(
+    "ws_watchdog_reconnects_total", "Принудительные реконнекты вотчдога тишины", ["exchange"],
+)
 
 # ── Состояние процесса ──
 _state: dict = {
@@ -211,6 +214,9 @@ async def health() -> dict:
         "redis_connected": redis_ok,
         "messages_per_minute": _messages_per_minute(total_msgs),
         "db_rows_written": writer.rows_written if writer else 0,
+        # Срабатывания вотчдога тишины по биржам — рост числа указывает на
+        # проблемный фид (VPN, лаги биржи) раньше, чем это видно по сделкам.
+        "watchdog_reconnects": {c.name: c.forced_reconnects for c in collectors},
     }
 
 
@@ -219,4 +225,6 @@ async def metrics() -> Response:
     collectors: list[ExchangeCollector] = _state["collectors"]
     _ws_connections_gauge.set(sum(1 for c in collectors if c.status == "connected"))
     _ws_messages_gauge.set(sum(c.message_count for c in collectors))
+    for c in collectors:
+        _ws_watchdog_gauge.labels(exchange=c.name).set(c.forced_reconnects)
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

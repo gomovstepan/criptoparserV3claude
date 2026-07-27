@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard,
@@ -9,6 +10,8 @@ import {
   X,
 } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { useDialog } from '../hooks/useDialog'
+import Button from './Button'
 
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -22,18 +25,18 @@ const NAV_ITEMS = [
 function NavContent({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <>
-      <div className="flex h-14 items-center justify-between gap-2 border-b border-edge px-5">
+      <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-edge px-5">
         <div className="flex items-center gap-2">
-          <span className="h-2.5 w-2.5 rounded-full bg-accent" />
+          <span className="h-2.5 w-2.5 rounded-full bg-accent" aria-hidden="true" />
           <span className="font-semibold tracking-tight text-ink">ArbitrageHub</span>
         </div>
         {onNavigate && (
-          <button onClick={onNavigate} aria-label="Закрыть меню" className="text-muted hover:text-ink md:hidden">
-            <X size={18} />
-          </button>
+          <Button variant="ghost" size="icon" onClick={onNavigate} aria-label="Закрыть меню" className="md:hidden">
+            <X size={18} aria-hidden="true" />
+          </Button>
         )}
       </div>
-      <nav className="flex flex-col gap-1 p-3">
+      <nav aria-label="Основная навигация" className="flex flex-col gap-1 p-3">
         {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
@@ -41,14 +44,14 @@ function NavContent({ onNavigate }: { onNavigate?: () => void }) {
             onClick={onNavigate}
             className={({ isActive }) =>
               cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
+                'flex min-h-[44px] items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors duration-fast',
                 isActive
                   ? 'bg-accent/10 font-medium text-accent'
                   : 'text-muted hover:bg-surface2 hover:text-ink',
               )
             }
           >
-            <Icon size={18} />
+            <Icon size={18} aria-hidden="true" />
             {label}
           </NavLink>
         ))}
@@ -57,7 +60,13 @@ function NavContent({ onNavigate }: { onNavigate?: () => void }) {
   )
 }
 
-/** Боковое меню. На desktop — статичная колонка; на mobile — выезжающий drawer. */
+/**
+ * Боковое меню. На desktop — статичная колонка; на mobile — выезжающий drawer.
+ *
+ * Закрытый drawer помечен `inert`: раньше он оставался в потоке фокуса, и
+ * пользователь клавиатуры «проваливался» в невидимое меню. Плюс Esc, возврат
+ * фокуса на кнопку-гамбургер и блокировка прокрутки фона (useDialog).
+ */
 export default function Sidebar({
   mobileOpen,
   onClose,
@@ -65,6 +74,9 @@ export default function Sidebar({
   mobileOpen: boolean
   onClose: () => void
 }) {
+  const drawerRef = useRef<HTMLElement>(null)
+  useDialog(mobileOpen, onClose, drawerRef)
+
   return (
     <>
       {/* Desktop */}
@@ -73,20 +85,23 @@ export default function Sidebar({
       </aside>
 
       {/* Mobile drawer */}
-      <div
-        className={cn('fixed inset-0 z-40 md:hidden', mobileOpen ? '' : 'pointer-events-none')}
-        aria-hidden={!mobileOpen}
-      >
+      <div className={cn('fixed inset-0 z-drawer md:hidden', !mobileOpen && 'pointer-events-none')} inert={!mobileOpen}>
         <div
+          aria-hidden="true"
           className={cn(
-            'absolute inset-0 bg-black/60 transition-opacity',
+            'absolute inset-0 bg-black/60 transition-opacity duration-base',
             mobileOpen ? 'opacity-100' : 'opacity-0',
           )}
           onClick={onClose}
         />
         <aside
+          ref={drawerRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Меню навигации"
+          tabIndex={-1}
           className={cn(
-            'absolute left-0 top-0 flex h-full w-60 flex-col border-r border-edge bg-surface transition-transform',
+            'absolute left-0 top-0 flex h-full w-60 flex-col overflow-y-auto border-r border-edge bg-surface outline-none transition-transform duration-base',
             mobileOpen ? 'translate-x-0' : '-translate-x-full',
           )}
         >

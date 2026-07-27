@@ -7,7 +7,21 @@
       "Bash(npm run *)",
       "Bash(docker cp *)",
       "Bash(docker exec *)",
-      "Bash(set -e)"
+      "Bash(set -e)",
+      "Read(//root/.claude/plugins/cache/ui-ux-pro-max-skill/ui-ux-pro-max/2.11.0/.claude/skills/ui-ux-pro-max/**)",
+      "Read(//root/.claude/plugins/cache/ui-ux-pro-max-skill/ui-ux-pro-max/2.11.0/.claude/skills/ui-ux-pro-max/references/**)",
+      "Read(//root/.claude/plugins/cache/ui-ux-pro-max-skill/ui-ux-pro-max/2.11.0/.claude/skills/ui-ux-pro-max/scripts/**)",
+      "Bash(python3 /root/.claude/plugins/cache/ui-ux-pro-max-skill/ui-ux-pro-max/2.11.0/.claude/skills/ui-ux-pro-max/scripts/search.py 'realtime dashboard line bar timeseries pnl' --domain chart -n 5)",
+      "Bash(node -p \"['react','recharts','zustand','sonner','tailwindcss','typescript','vite'].map\\(p=>p+'@'+require\\('./node_modules/'+p+'/package.json'\\).version\\).join\\('\\\\n'\\)\")",
+      "Read(//proc/1/**)",
+      "Bash(ls -d /.dockerenv)",
+      "Bash(ps -p 1 -o comm=)",
+      "Bash(command -v systemctl)",
+      "Bash(command -v iptables)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:4173/)",
+      "Bash(curl -s http://127.0.0.1:4173/)",
+      "Bash(/root/.graphify-venv/bin/python -m py_compile api-gateway/routers/exchanges.py api-gateway/routers/stats.py api-gateway/routers/analytics.py api-gateway/routers/pnl_sql.py executor/main.py)",
+      "Bash(/root/.graphify-venv/bin/python -)"
     ]
   }
 }

@@ -9,6 +9,7 @@ Redis Stream ``prices``.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 
 import structlog
@@ -37,6 +38,17 @@ MULTIPLEX_CHUNK_SIZE = {
 }
 DEFAULT_MULTIPLEX_CHUNK_SIZE = 50  # эффективно «без чанкования»
 
+# Вотчдог «тихого зависания»: WS жив на уровне TCP (VPN half-open), но данные
+# не идут — исключения нет, и штатный reconnect не срабатывает. Триггер — тишина
+# ЦЕЛОГО соединения (агрегатный поток биржи в норме 6–127 msg/s, вероятность
+# честной тишины 3с ~ нулевая). Тишина ОТДЕЛЬНОГО символа триггером не является:
+# тихие книги неликвидов молчат минутами, это нормальный рынок.
+WATCHDOG_SILENCE_SEC = float(os.getenv("WATCHDOG_SILENCE_SEC", "3.0"))
+# Бюджет ПЕРВОГО ответа после (пере)подключения: handshake + subscribe + снапшот
+# через VPN занимают заметно больше 3с. Жёсткие 3с на этот участок устраивали
+# шторм реконнектов на старте (25 срабатываний в первую секунду прогона).
+WATCHDOG_HANDSHAKE_SEC = float(os.getenv("WATCHDOG_HANDSHAKE_SEC", "30.0"))
+
 
 class ExchangeCollector:
     """Сбор best bid/ask с одной биржи по списку символов."""
@@ -48,9 +60,11 @@ class ExchangeCollector:
         self.exchange = None
         self.status = "connecting"   # connecting | connected | reconnecting | disconnected
         self.message_count = 0
+        self.forced_reconnects = 0   # срабатывания вотчдога (метрика /health)
         self._running = False
         self._tasks: list[asyncio.Task] = []
         self._handshake_sem = asyncio.Semaphore(HANDSHAKE_CONCURRENCY)
+        self._last_message_ms = 0    # для вотчдога per-symbol режима
 
     async def start(self) -> None:
         """Создать CCXT-инстанс и запустить watch-таски.
@@ -90,6 +104,11 @@ class ExchangeCollector:
                 )
                 for idx, sym in enumerate(self.symbols)
             ]
+            # В per-symbol режиме wait_for на отдельный символ нельзя (тихая
+            # книга — не сбой), поэтому тишину всей биржи следит отдельный таск.
+            self._tasks.append(asyncio.create_task(
+                self._watchdog_loop(), name=f"{self.name}:watchdog",
+            ))
             log.info(
                 "collector_started",
                 exchange=self.name, symbols=self.symbols, mode="per_symbol",
@@ -102,18 +121,42 @@ class ExchangeCollector:
         возвращает обновление по очередному из них при каждом await.
         """
         attempt = 0
+        streaming = False   # True после первого обновления на текущем соединении
         while self._running:
             try:
-                order_book = await self.exchange.watch_order_book_for_symbols(symbols)
+                # В steady state (streaming) пауза чанка > 3с — мёртвый сокет.
+                # Сразу после (пере)подключения даём handshake-бюджет: первый
+                # ответ включает рукопожатие, подписку и начальный снапшот.
+                timeout = WATCHDOG_SILENCE_SEC if streaming else WATCHDOG_HANDSHAKE_SEC
+                order_book = await asyncio.wait_for(
+                    self.exchange.watch_order_book_for_symbols(symbols),
+                    timeout=timeout,
+                )
                 self.status = "connected"
+                streaming = True
                 attempt = 0
                 symbol = order_book.get("symbol")
                 if symbol:
                     await self._handle_order_book(symbol, order_book)
             except asyncio.CancelledError:
                 raise
+            except asyncio.TimeoutError:
+                # Тихое зависание: чанк на 10-50 символов не прислал НИ ОДНОГО
+                # обновления. close() рвёт сокет (у bybit уронит и соседние
+                # чанки — они переподключатся штатной веткой ws_error).
+                delay = backoff_delay(attempt)
+                log.warning(
+                    "ws_watchdog_reconnect", exchange=self.name,
+                    symbol=f"<multi:{len(symbols)}>", was_streaming=streaming,
+                    silence_sec=timeout, retry_in_sec=round(delay, 1),
+                )
+                await self._force_reconnect()
+                streaming = False
+                attempt += 1
+                await asyncio.sleep(delay)
             except Exception as err:  # noqa: BLE001
                 self.status = "reconnecting"
+                streaming = False
                 delay = backoff_delay(attempt)
                 log.warning(
                     "ws_error", exchange=self.name,
@@ -158,6 +201,7 @@ class ExchangeCollector:
         if not bids or not asks:
             return
         now = int(time.time() * 1000)
+        self._last_message_ms = now
         exchange_ts = order_book.get("timestamp") or now
         tick = PriceTick(
             exchange=self.name,
@@ -170,9 +214,74 @@ class ExchangeCollector:
             received_at=now,
             latency_ms=max(0, now - int(exchange_ts)),
         )
+        # Глубина публикуется РАНЬШЕ тика: сканер разбужен тиком и тут же
+        # читает depth-ключ — обратный порядок регулярно подсовывал ему
+        # глубину старше собственного сигнала (гонка публикаций).
+        # ts = min(now, биржевой): лаг биржа→коллектор (пики до 34с) должен
+        # съедать бюджет свежести, иначе executor торгует по мёртвой книге,
+        # считая её секундной.
+        await self.publisher.publish_depth(
+            self.name, symbol, bids, asks, min(now, int(exchange_ts)),
+        )
         await self.publisher.publish_price(tick)
-        await self.publisher.publish_depth(self.name, symbol, bids, asks, now)
         self.message_count += 1
+
+    async def _force_reconnect(self) -> None:
+        """Принудительно разорвать WS после тишины.
+
+        ``close()`` сбрасывает все клиенты ccxt — watch-циклы пересоздадут
+        подписки. Depth-ключи биржи удаляются сразу: scanner/executor должны
+        увидеть отсутствие книги, а не дотрагивать TTL по мёртвым данным.
+        """
+        self.status = "reconnecting"
+        self.forced_reconnects += 1
+        try:
+            await self.exchange.close()
+        except Exception as err:  # noqa: BLE001
+            log.warning("ws_close_error", exchange=self.name, error=str(err))
+        try:
+            await self.publisher.delete_depth(self.name, self.symbols)
+        except Exception as err:  # noqa: BLE001
+            log.warning("depth_cleanup_error", exchange=self.name, error=str(err))
+
+    async def _watchdog_loop(self) -> None:
+        """Вотчдог per-symbol режима: тишина ВСЕЙ биржи > WATCHDOG_SILENCE_SEC.
+
+        Ни одного сообщения ни по одному символу — это мёртвый фид, а не тихий
+        рынок (агрегатный поток gateio/bingx в норме 11–127 msg/s).
+
+        ``baseline_ms`` — точка отсчёта тишины, пока сообщений нет: на буте
+        (фид, мёртвый с самого старта, ловится после handshake-грейса) и после
+        каждого срабатывания (грейс на stagger 250мс × N символов, иначе
+        вотчдог стрелял бы по ещё не поднявшимся соединениям). ``attempt``
+        сбрасывается только по НАСТОЯЩЕМУ сообщению после срабатывания —
+        иначе backoff никогда не эскалировал бы для стабильно мёртвого фида.
+        """
+        boot_grace = STAGGER_DELAY_SEC * len(self.symbols) + WATCHDOG_HANDSHAKE_SEC
+        baseline_ms = int(time.time() * 1000) + int(boot_grace * 1000)
+        last_fire_msg_ms = 0
+        attempt = 0
+        while self._running:
+            await asyncio.sleep(1.0)
+            if not self._running:
+                break
+            if attempt and self._last_message_ms > last_fire_msg_ms:
+                attempt = 0  # после срабатывания пришли живые данные
+            now = int(time.time() * 1000)
+            silence_ms = now - max(self._last_message_ms, baseline_ms)
+            if silence_ms <= WATCHDOG_SILENCE_SEC * 1000:
+                continue
+            delay = backoff_delay(attempt)
+            log.warning(
+                "ws_watchdog_reconnect", exchange=self.name, symbol="<all>",
+                silence_ms=silence_ms, attempt=attempt, retry_in_sec=round(delay, 1),
+            )
+            await self._force_reconnect()
+            last_fire_msg_ms = self._last_message_ms
+            attempt += 1
+            grace = max(delay, boot_grace)
+            baseline_ms = int(time.time() * 1000) + int(grace * 1000)
+            await asyncio.sleep(grace)
 
     async def stop(self) -> None:
         """Graceful shutdown: отменить таски и закрыть WS-соединение."""

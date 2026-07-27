@@ -107,5 +107,31 @@ class TestFreshness(unittest.TestCase):
         self.assertFalse(is_fresh(None, now_ms=1_000_000))
 
 
+class TestCorruptBooks(unittest.TestCase):
+    """Защита от битых книг: NaN-уровни и нарушенная сортировка."""
+
+    def test_nan_levels_are_skipped(self):
+        # NaN проходит сравнение `<= 0` (всегда False) — walk обязан отбросить
+        # такой уровень явной проверкой, а не пропустить его в VWAP.
+        res = walk_asks_for_notional([[float("nan"), 5.0], [100.0, 50.0]], 1000.0)
+        self.assertIsNotNone(res)
+        amount, vwap = res
+        self.assertAlmostEqual(vwap, 100.0, places=6)
+        res = walk_bids_for_amount([[float("nan"), 5.0], [100.0, 50.0]], 10.0)
+        self.assertAlmostEqual(res, 100.0, places=6)
+
+    def test_unsorted_asks_rejected(self):
+        # asks обязаны идти по возрастанию: обратный порядок — битая книга
+        self.assertIsNone(
+            walk_asks_for_notional([[101.0, 5.0], [100.0, 50.0]], 1000.0)
+        )
+
+    def test_unsorted_bids_rejected(self):
+        # bids обязаны идти по убыванию
+        self.assertIsNone(
+            walk_bids_for_amount([[100.0, 5.0], [102.0, 50.0]], 10.0)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

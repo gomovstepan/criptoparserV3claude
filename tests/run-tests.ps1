@@ -10,6 +10,7 @@ $cases = @(
   @{ name = 'test_spread_calculator'; container = 'arb-scanner' },
   @{ name = 'test_depth';             container = 'arb-scanner' },
   @{ name = 'test_pnl_calculator';    container = 'arb-executor' },
+  @{ name = 'test_paper_trading';     container = 'arb-executor' },
   @{ name = 'test_api';               container = 'arb-api-gateway' },
   @{ name = 'test_integration';       container = 'arb-api-gateway' }
 )

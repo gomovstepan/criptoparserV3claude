@@ -3,8 +3,7 @@
 Эти модели — контракт данных между сервисами (формат в Redis Streams и в БД):
 - ``PriceTick``    — тик цены от collector'а (stream ``prices``);
 - ``Opportunity``  — арбитражная возможность от scanner'а (stream ``opportunities``);
-- ``Trade``        — результат paper-сделки от executor'а (stream ``trades``);
-- ``ExchangeInfo`` — конфиг биржи для REST API.
+- ``Trade``        — результат paper-сделки от executor'а (stream ``trades``).
 """
 from __future__ import annotations
 
@@ -66,7 +65,7 @@ class Opportunity(BaseModel):
         return {k: str(v) for k, v in self.model_dump().items()}
 
     @classmethod
-    def from_redis(cls, data: dict) -> "Opportunity":
+    def from_redis(cls, data: dict) -> Opportunity:
         """Собрать из полей Redis Stream (pydantic приведёт строки к типам)."""
         return cls(**data)
 
@@ -88,6 +87,11 @@ class Trade(BaseModel):
     slippage_cost: float = 0.0
     gross_pnl: float
     net_pnl: float
+    # Top-of-book обеих ног НА МОМЕНТ ИСПОЛНЕНИЯ. Без них gross_pnl и
+    # slippage_cost алгебраически неразложимы постфактум (линейно зависимы),
+    # а строка opportunity хранит цены другого снапшота — сверка невозможна.
+    buy_top_ask: float | None = None
+    sell_top_bid: float | None = None
     status: Literal["pending", "completed", "failed", "cancelled"] = "pending"
     executed_at: int | None = None
     duration_ms: int | None = None
@@ -97,19 +101,7 @@ class Trade(BaseModel):
         return {k: ("" if v is None else str(v)) for k, v in self.model_dump().items()}
 
     @classmethod
-    def from_redis(cls, data: dict) -> "Trade":
+    def from_redis(cls, data: dict) -> Trade:
         """Собрать из полей Redis Stream (пустая строка → None)."""
         clean = {k: (None if v == "" else v) for k, v in data.items()}
         return cls(**clean)
-
-
-class ExchangeInfo(BaseModel):
-    """Конфиг биржи для отдачи через REST API / дашборд."""
-
-    exchange: str
-    is_active: bool = True
-    maker_fee_pct: float
-    taker_fee_pct: float
-    withdrawal_btc: float | None = None
-    withdrawal_usdt: float | None = None
-    rate_limit_req_per_sec: int | None = None

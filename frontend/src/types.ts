@@ -6,7 +6,13 @@ export interface Opportunity {
   buy_price: number
   sell_price: number
   gross_spread_pct: number
+  // net_spread_pct — display-only: вычитает комиссию вывода, размазанную на
+  // один notional (~40x пессимистичнее фактического списания при ребалансе).
+  // Для фильтров/бейджей используется net_fees_pct = gross − обе taker-комиссии.
   net_spread_pct: number
+  buy_fee_pct?: number
+  sell_fee_pct?: number
+  net_fees_pct?: number
   detected_at: string
 }
 
@@ -25,6 +31,13 @@ export interface Trade {
   buy_price?: number
   sell_price?: number
   duration_ms?: number | null
+  // Разложение P&L: net = gross − slippage − buy_fee − sell_fee.
+  buy_fee?: number
+  sell_fee?: number
+  slippage_cost?: number
+  // Top-of-book на момент исполнения (null у сделок до миграции).
+  buy_top_ask?: number | null
+  sell_top_bid?: number | null
 }
 
 export interface ExchangeStatus {
@@ -83,17 +96,6 @@ export interface ExchangeConfig {
 
 export type ExchangeConnStatus = 'connected' | 'stale' | 'disconnected'
 
-export interface SettingsMap {
-  min_spread_pct: number
-  max_position_pct: number
-  slippage_tolerance_pct: number
-  execution_timeout_sec: number
-  daily_loss_limit_pct: number
-  notification_spread_threshold: number
-  notification_trade_min_pnl: number
-  [key: string]: number | string | boolean
-}
-
 /** Описание полей формы настроек (ключ в `settings` → подпись/единица/шаг). */
 export const SETTING_FIELDS: {
   key: string
@@ -101,12 +103,24 @@ export const SETTING_FIELDS: {
   unit: string
   step: number
   hint: string
+  /** Бэкенд допускает отрицательное значение (см. SettingsUpdate в exchanges.py). */
+  allowNegative?: boolean
 }[] = [
-  { key: 'min_spread_pct', label: 'Мин. спред', unit: '%', step: 0.01, hint: 'Порог для создания opportunity' },
+  // Здесь только настройки, которые сервисы реально читают. Раньше форма
+  // показывала ещё slippage_tolerance_pct, execution_timeout_sec и
+  // daily_loss_limit_pct — они сохранялись в БД, но не читались ни одним
+  // сервисом (дневной лимит убытка — нереализованное требование ТЗ E-014).
+  // Возвращать поле сюда можно только вместе с кодом, который его использует,
+  // и с ключом в allowlist PUT /api/v1/settings (роутер exchanges.py).
+  { key: 'min_spread_pct', label: 'Мин. спред (gross)', unit: '%', step: 0.01, hint: 'Грубый префильтр opportunity по gross-спреду' },
+  { key: 'min_net_spread_pct', label: 'Мин. net-спред', unit: '%', step: 0.01, hint: 'Фильтр по спреду за вычетом taker-комиссий обеих бирж' },
   { key: 'max_position_pct', label: 'Макс. позиция', unit: '%', step: 0.5, hint: '% от баланса биржи на сделку' },
-  { key: 'slippage_tolerance_pct', label: 'Slippage', unit: '%', step: 0.05, hint: 'Допустимое проскальзывание' },
-  { key: 'execution_timeout_sec', label: 'Таймаут исполнения', unit: 'сек', step: 1, hint: 'Макс. время на сделку' },
-  { key: 'daily_loss_limit_pct', label: 'Дневной лимит убытка', unit: '%', step: 0.5, hint: 'Стоп торговли за день' },
+  // allowNegative: оператор может сознательно допустить мелкий минус в paper-режиме,
+  // чтобы наблюдать поток сделок (бэкенд разрешает от -1000).
+  { key: 'min_profit_usd', label: 'Мин. прибыль сделки', unit: '$', step: 0.1, hint: 'Executor не исполняет сделку с net P&L ниже порога', allowNegative: true },
+  { key: 'loss_cooldown_sec', label: 'Кулдаун после убытка', unit: 'с', step: 10, hint: 'Пауза для связки после убыточной оценки (0 — выкл.)' },
+  { key: 'depth_max_age_ms_executor', label: 'Свежесть стакана (executor)', unit: 'мс', step: 100, hint: 'Старше — сделка пропускается' },
+  { key: 'depth_max_age_ms_scanner', label: 'Свежесть стакана (scanner)', unit: 'мс', step: 100, hint: 'Старше — пара не сканируется' },
   { key: 'notification_spread_threshold', label: 'Порог алерта (спред)', unit: '%', step: 0.05, hint: 'Min спред для Telegram' },
   { key: 'notification_trade_min_pnl', label: 'Порог алерта (сделка)', unit: '$', step: 1, hint: 'Min |net P&L| для Telegram' },
 ]
@@ -122,7 +136,11 @@ export const SYMBOLS = [
   'PEPE/USDT', 'BONK/USDT', 'WIF/USDT', 'FLOKI/USDT', 'MEME/USDT',
   'PENGU/USDT', 'HTX/USDT',
 ]
-export const TRADE_STATUSES = ['completed', 'failed', 'pending', 'cancelled']
+// В paper-режиме executor записывает только 'completed' (paper_trading.py
+// хардкодит статус). failed/pending/cancelled зарезервированы схемой БД,
+// но кодом не создаются — фильтр их не предлагает, чтобы не обещать пустых
+// выборок. Расширять список только вместе с кодом, который пишет эти статусы.
+export const TRADE_STATUSES = ['completed']
 
 export const RANGE_PRESETS: { label: string; days: number }[] = [
   { label: 'Последние 24 часа', days: 1 },

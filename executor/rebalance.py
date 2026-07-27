@@ -3,6 +3,10 @@
 Когда баланс биржи-покупки падает ниже порога — переводим половину
 с самой богатой биржи (донора). Комиссия вывода списывается один раз
 за ребаланс, а не за каждую сделку.
+
+Донор после перевода обязан сам остаться выше порога: иначе следующая
+opportunity с ним как buy-биржей запустила бы обратный перевод —
+«пинг-понг» между двумя бедными биржами с уплатой комиссии за каждый круг.
 """
 from __future__ import annotations
 
@@ -44,7 +48,14 @@ async def maybe_rebalance(
     donor = max(balances, key=balances.get)
     donor_balance = balances[donor]
 
-    if donor == exchange or donor_balance <= threshold:
+    gross_amount = donor_balance / 2.0
+    fee = EXCHANGES[donor].withdrawal_usdt
+    net_amount = gross_amount - fee
+
+    # gross_amount — одновременно размер перевода и новый баланс донора
+    # (половина). Донор обязан остаться выше порога, а перевод — покрывать
+    # комиссию вывода, иначе ребаланс лишь гоняет деньги по кругу.
+    if donor == exchange or gross_amount <= threshold or net_amount <= 0.0:
         await r.set(KILL_SWITCH_KEY, "1")
         log.warning(
             "rebalance_impossible_kill_switch",
@@ -54,10 +65,6 @@ async def maybe_rebalance(
             threshold=threshold,
         )
         return None
-
-    gross_amount = donor_balance / 2.0
-    fee = EXCHANGES[donor].withdrawal_usdt
-    net_amount = gross_amount - fee
 
     donor_new = await update_balance(r, donor, -gross_amount)
     receiver_new = await update_balance(r, exchange, net_amount)

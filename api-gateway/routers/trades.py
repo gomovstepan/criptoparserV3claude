@@ -6,16 +6,20 @@ import io
 from math import ceil
 
 from fastapi import APIRouter, Depends, Query, Response
+from starlette.concurrency import run_in_threadpool
 
 from auth import get_current_user
 from shared.db import get_db_pool
 
 router = APIRouter(prefix="/api/v1", tags=["trades"])
 
-# Колонки, которые отдаём наружу (и в JSON, и в CSV).
+# Колонки, которые отдаём наружу (и в JSON, и в CSV). Разложение
+# gross → slippage → fees → net обязано доезжать до фронта целиком:
+# без него цифры в карточке сделки не сходятся (K4).
 _COLUMNS = (
     "time, id, opportunity_id, symbol, buy_exchange, sell_exchange, buy_price, "
-    "sell_price, amount, gross_pnl, net_pnl, status, duration_ms"
+    "sell_price, amount, buy_fee, sell_fee, slippage_cost, gross_pnl, net_pnl, "
+    "buy_top_ask, sell_top_bid, status, duration_ms"
 )
 
 
@@ -55,8 +59,14 @@ def _row_to_dict(r) -> dict:
         "buy_price": float(r["buy_price"]),
         "sell_price": float(r["sell_price"]),
         "amount": float(r["amount"]),
+        "buy_fee": float(r["buy_fee"]),
+        "sell_fee": float(r["sell_fee"]),
+        "slippage_cost": float(r["slippage_cost"]),
         "gross_pnl": float(r["gross_pnl"]),
         "net_pnl": float(r["net_pnl"]),
+        # Nullable: сделки до миграции top-цен не имеют.
+        "buy_top_ask": float(r["buy_top_ask"]) if r["buy_top_ask"] is not None else None,
+        "sell_top_bid": float(r["sell_top_bid"]) if r["sell_top_bid"] is not None else None,
         "status": r["status"],
         "executed_at": r["time"].isoformat(),
         "duration_ms": r["duration_ms"],
@@ -135,19 +145,27 @@ async def export_trades(
         *params, limit,
     )
 
-    buf = io.StringIO()
     header = [
         "executed_at", "id", "opportunity_id", "symbol", "buy_exchange", "sell_exchange",
-        "buy_price", "sell_price", "amount", "gross_pnl", "net_pnl", "status", "duration_ms",
+        "buy_price", "sell_price", "amount", "buy_fee", "sell_fee", "slippage_cost",
+        "gross_pnl", "net_pnl", "buy_top_ask", "sell_top_bid", "status", "duration_ms",
     ]
+    # Сериализация до 200k строк — CPU-bound: в треде, иначе она блокирует
+    # event loop (включая /ws-броадкастеры) на всё время выгрузки.
+    content = await run_in_threadpool(_rows_to_csv, rows, header)
+
+    return Response(
+        content=content,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=trades.csv"},
+    )
+
+
+def _rows_to_csv(rows, header: list[str]) -> str:
+    buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(header)
     for r in rows:
         d = _row_to_dict(r)
         writer.writerow([d[k] for k in header])
-
-    return Response(
-        content=buf.getvalue(),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=trades.csv"},
-    )
+    return buf.getvalue()

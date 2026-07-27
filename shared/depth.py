@@ -13,8 +13,13 @@ from __future__ import annotations
 import json
 
 DEPTH_LEVELS = 10          # уровней с каждой стороны
-DEPTH_TTL_SEC = 10         # жёсткий TTL ключа в Redis
-DEPTH_MAX_AGE_MS = 5_000   # мягкий порог свежести для scanner/executor
+# Жёсткий TTL ключа в Redis. Держится чуть выше порогов свежести (executor 2с,
+# scanner 3с — из settings), чтобы «зомби-окно» (ключ жив, но давно несвеж)
+# было минимальным.
+DEPTH_TTL_SEC = 5
+# Дефолтный мягкий порог свежести. Scanner и executor передают СВОИ значения
+# из settings (depth_max_age_ms_scanner / depth_max_age_ms_executor).
+DEPTH_MAX_AGE_MS = 5_000
 
 _EPS = 1e-9
 
@@ -49,6 +54,20 @@ def is_fresh(depth: dict | None, now_ms: int, max_age_ms: int = DEPTH_MAX_AGE_MS
     return depth is not None and (now_ms - depth["ts"]) <= max_age_ms
 
 
+def first_valid_price(levels: list) -> float | None:
+    """Цена первого валидного уровня (тот же фильтр, что в walk_*).
+
+    Топ книги нельзя брать как ``levels[0][0]`` напрямую: NaN переживает
+    JSON-раундтрип и отравил бы gross_pnl/slippage_cost, а нулевая цена
+    молча исказила бы их. None — валидного топа нет.
+    """
+    for price, qty in levels:
+        price, qty = float(price), float(qty)
+        if price > 0 and qty > 0:
+            return price
+    return None
+
+
 def walk_asks_for_notional(asks: list, notional_usd: float) -> tuple[float, float] | None:
     """Купить на ``notional_usd`` USDT, съедая asks снизу вверх.
 
@@ -58,10 +77,16 @@ def walk_asks_for_notional(asks: list, notional_usd: float) -> tuple[float, floa
         return None
     remaining = notional_usd
     amount = 0.0
+    prev_price = 0.0
     for price, qty in asks:
         price, qty = float(price), float(qty)
-        if price <= 0 or qty <= 0:
+        # Инвертированное условие вместо `<= 0`: сравнение с NaN всегда False,
+        # поэтому только так NaN-уровень отбрасывается, а не проходит в VWAP.
+        if not (price > 0 and qty > 0):
             continue
+        if price < prev_price:
+            return None  # asks обязаны идти по возрастанию — книга битая
+        prev_price = price
         level_cost = price * qty
         if level_cost >= remaining:
             amount += remaining / price
@@ -83,10 +108,15 @@ def walk_bids_for_amount(bids: list, amount_base: float) -> float | None:
         return None
     remaining = amount_base
     proceeds = 0.0
+    prev_price = float("inf")
     for price, qty in bids:
         price, qty = float(price), float(qty)
-        if price <= 0 or qty <= 0:
+        # См. walk_asks_for_notional: `not (x > 0)` отсекает и NaN.
+        if not (price > 0 and qty > 0):
             continue
+        if price > prev_price:
+            return None  # bids обязаны идти по убыванию — книга битая
+        prev_price = price
         take = qty if qty < remaining else remaining
         proceeds += take * price
         remaining -= take

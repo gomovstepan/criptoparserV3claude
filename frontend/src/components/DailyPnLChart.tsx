@@ -1,34 +1,74 @@
-import { Bar, BarChart, Cell, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import {
+  Bar,
+  BarChart,
+  Cell,
+  CartesianGrid,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
+import { BarChart3 } from 'lucide-react'
 import type { DailyPoint } from '../types'
+import { formatDayMonth, formatUsd } from '../lib/format'
+import { useChartTheme, tooltipStyle } from '../hooks/useChartTheme'
+import EmptyState from './EmptyState'
 
-/** Net P&L по дням (BarChart, зелёный/красный по знаку). */
+/**
+ * Net P&L по дням (BarChart, зелёный/красный по знаку).
+ * Нулевая линия обязательна: без неё знак столбца читается только по цвету.
+ */
 export default function DailyPnLChart({ data }: { data: DailyPoint[] }) {
+  const t = useChartTheme()
+
   if (data.length === 0) {
-    return <div className="flex h-[240px] items-center justify-center text-sm text-muted">Нет данных</div>
+    return (
+      <div className="flex h-[240px] items-center justify-center">
+        <EmptyState compact icon={BarChart3} title="Нет сделок за период" />
+      </div>
+    )
   }
+
+  const profitable = data.filter((d) => d.net_pnl >= 0).length
+
   return (
-    <ResponsiveContainer width="100%" height={240}>
-      <BarChart data={data} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#252540" vertical={false} />
-        <XAxis dataKey="date" stroke="#94a3b8" fontSize={11} tickLine={false} />
-        <YAxis stroke="#94a3b8" fontSize={11} width={60} tickLine={false} />
-        <Tooltip
-          cursor={{ fill: '#1a1a2e' }}
-          contentStyle={{
-            background: '#12121f',
-            border: '1px solid #252540',
-            borderRadius: 8,
-            color: '#f1f5f9',
-            fontSize: 12,
-          }}
-          formatter={(v: number) => [`$${v.toFixed(2)}`, 'Net P&L']}
-        />
-        <Bar dataKey="net_pnl" radius={[3, 3, 0, 0]} isAnimationActive={false}>
-          {data.map((d) => (
-            <Cell key={d.date} fill={d.net_pnl >= 0 ? '#22c55e' : '#ef4444'} />
-          ))}
-        </Bar>
-      </BarChart>
-    </ResponsiveContainer>
+    <div
+      role="img"
+      aria-label={`Чистый P&L по дням за ${data.length} дней: прибыльных дней ${profitable}, убыточных ${data.length - profitable}.`}
+    >
+      <ResponsiveContainer width="100%" height={240}>
+        <BarChart data={data} margin={{ top: 10, right: 12, left: 0, bottom: 0 }} accessibilityLayer>
+          <CartesianGrid strokeDasharray="3 3" stroke={t.grid} vertical={false} />
+          <XAxis
+            dataKey="date"
+            tickFormatter={formatDayMonth}
+            stroke={t.axis}
+            fontSize={11}
+            tickLine={false}
+            minTickGap={20}
+          />
+          <YAxis
+            stroke={t.axis}
+            fontSize={11}
+            width={72}
+            tickLine={false}
+            tickFormatter={(v: number) => formatUsd(v)}
+          />
+          <ReferenceLine y={0} stroke={t.axis} strokeOpacity={0.6} />
+          <Tooltip
+            cursor={{ fill: t.grid, fillOpacity: 0.4 }}
+            contentStyle={tooltipStyle(t)}
+            labelFormatter={(v) => formatDayMonth(v as string)}
+            formatter={(v: number) => [formatUsd(v, true), 'Net P&L']}
+          />
+          <Bar dataKey="net_pnl" radius={[3, 3, 0, 0]} isAnimationActive={false}>
+            {data.map((d) => (
+              <Cell key={d.date} fill={d.net_pnl >= 0 ? t.success : t.danger} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
   )
 }

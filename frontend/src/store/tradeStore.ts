@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import api from '../lib/api'
+import { asArray, asNumber } from '../lib/utils'
 import type { Trade } from '../types'
 
 export interface TradeFilters {
@@ -11,6 +12,9 @@ export interface TradeFilters {
 }
 
 const emptyFilters: TradeFilters = { status: '', symbol: '', exchange: '', start: '', end: '' }
+
+// Порядковый номер запроса fetch(): ответ с несовпадающим номером устарел.
+let fetchSeq = 0
 
 interface TradeState {
   items: Trade[]
@@ -60,19 +64,23 @@ export const useTradeStore = create<TradeState>((set, get) => ({
   setPageSize: (n) => set({ pageSize: n, page: 1 }),
   select: (t) => set({ selected: t }),
   fetch: async () => {
+    // Быстрое переключение фильтров/страниц порождает параллельные запросы;
+    // без порядкового номера медленный устаревший ответ затирал бы свежий.
+    const seq = ++fetchSeq
     const { page, pageSize, filters } = get()
     set({ loading: true })
     try {
       const params = { page: String(page), page_size: String(pageSize), ...filtersToParams(filters) }
       const r = await api.get('/api/v1/trades', { params })
+      if (seq !== fetchSeq) return
       set({
-        items: r.data.items,
-        total: r.data.total,
-        totalPages: r.data.total_pages,
+        items: asArray<Trade>(r.data?.items),
+        total: asNumber(r.data?.total),
+        totalPages: asNumber(r.data?.total_pages),
         loading: false,
       })
     } catch {
-      set({ loading: false })
+      if (seq === fetchSeq) set({ loading: false })
     }
   },
   deleteFiltered: async () => {

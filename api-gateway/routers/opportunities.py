@@ -25,7 +25,8 @@ async def get_opportunities(
     pool = await get_db_pool()
     rows = await pool.fetch(
         f"SELECT time, id, symbol, buy_exchange, sell_exchange, buy_price, sell_price, "
-        f"gross_spread_pct, net_spread_pct FROM opportunities {where} "
+        f"gross_spread_pct, buy_fee_pct, sell_fee_pct, net_spread_pct "
+        f"FROM opportunities {where} "
         f"ORDER BY time DESC LIMIT ${len(params)}",
         *params,
     )
@@ -38,6 +39,15 @@ async def get_opportunities(
             "buy_price": float(r["buy_price"]),
             "sell_price": float(r["sell_price"]),
             "gross_spread_pct": float(r["gross_spread_pct"]),
+            "buy_fee_pct": float(r["buy_fee_pct"]),
+            "sell_fee_pct": float(r["sell_fee_pct"]),
+            # Честный net по модели ledger'а: только taker-комиссии обеих ног.
+            # net_spread_pct (ниже) дополнительно вычитает комиссию вывода,
+            # размазанную на один notional (~40x пессимистичнее фактической),
+            # и остаётся display-only — фильтровать по нему нельзя.
+            "net_fees_pct": round(
+                float(r["gross_spread_pct"]) - float(r["buy_fee_pct"]) - float(r["sell_fee_pct"]), 4,
+            ),
             "net_spread_pct": float(r["net_spread_pct"]),
             "detected_at": r["time"].isoformat(),
         }

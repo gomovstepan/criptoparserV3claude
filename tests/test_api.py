@@ -100,6 +100,58 @@ class TestAPI(unittest.TestCase):
         # min_length=1 ⇒ 422 от pydantic (или 403, если paper=false).
         self.assertIn(status, (403, 422))
 
+    # ── PUT /api/v1/settings (allowlist + границы значений) ──
+    # Недеструктивно: все запросы ниже обязаны отклоняться ДО записи в БД.
+    def test_put_settings_requires_auth(self):
+        status, _ = _req("PUT", "/api/v1/settings", body={"min_spread_pct": 0.3})
+        self.assertEqual(status, 401)
+
+    def test_put_settings_rejects_unknown_key(self):
+        # extra="forbid": раньше неизвестный ключ был молчаливым no-op с 200.
+        status, _ = _req("PUT", "/api/v1/settings",
+                         token=self.token, body={"nonexistent_key": 1})
+        self.assertEqual(status, 422)
+
+    def test_put_settings_rejects_out_of_range(self):
+        # max_position_pct ограничен 50: выше — Redis-баланс мог уйти в минус.
+        status, _ = _req("PUT", "/api/v1/settings",
+                         token=self.token, body={"max_position_pct": 10000})
+        self.assertEqual(status, 422)
+
+    def test_put_settings_rejects_removed_legacy_key(self):
+        # Мёртвые настройки убраны и из формы, и из allowlist.
+        status, _ = _req("PUT", "/api/v1/settings",
+                         token=self.token, body={"daily_loss_limit_pct": 5})
+        self.assertEqual(status, 422)
+
+    def test_put_settings_roundtrip_current_values(self):
+        """PUT текущих же значений: проверяет happy-path без изменения состояния."""
+        status, data = _req("GET", "/api/v1/settings", token=self.token)
+        self.assertEqual(status, 200)
+        payload = {k: data[k] for k in
+                   ("min_spread_pct", "max_position_pct",
+                    "notification_spread_threshold", "notification_trade_min_pnl")
+                   if k in data}
+        self.assertTrue(payload, "settings table lacks expected keys")
+        status, resp = _req("PUT", "/api/v1/settings", token=self.token, body=payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(resp["status"], "updated")
+        self.assertEqual(resp["not_found"], [])
+
+    # ── GET /api/v1/exchanges: комиссии обязаны совпадать с shared/config.py ──
+    def test_exchanges_fees_match_config(self):
+        from shared.config import EXCHANGES  # доступен внутри контейнера
+
+        status, data = _req("GET", "/api/v1/exchanges", token=self.token)
+        self.assertEqual(status, 200)
+        items = {i["exchange"]: i for i in data["items"]}
+        self.assertTrue(items)
+        for name, item in items.items():
+            cfg = EXCHANGES[name]
+            self.assertEqual(item["taker_fee_pct"], cfg.taker_fee_pct, name)
+            self.assertEqual(item["maker_fee_pct"], cfg.maker_fee_pct, name)
+            self.assertEqual(item["withdrawal_usdt"], cfg.withdrawal_usdt, name)
+
     # ── DELETE /api/v1/trades ── только проверка auth (деструктивно при успехе).
     def test_delete_trades_requires_auth(self):
         status, _ = _req("DELETE", "/api/v1/trades")

@@ -8,7 +8,7 @@ collector'а. Числа по комиссиям соответствуют та
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -83,15 +83,19 @@ class ExchangeConfig:
     is_active: bool = True
 
 
-# Справочник 7 бирж MVP. Комиссии — из ТЗ (раздел 2.2).
+# Справочник 7 бирж MVP. Комиссии сверены с официальными страницами/API бирж
+# (июль 2026): спот VIP0 без скидок за нативный токен; withdrawal_usdt — сеть
+# TRC20. У всех бирж комиссия вывода динамическая (зависит от загрузки Tron),
+# поэтому значения надо периодически перепроверять. У KuCoin ставка 0.10%
+# действует только для пар Class A (мейджоры); Class B/C — 0.2%/0.3%.
 # Прим.: в актуальной CCXT идентификатор Gate.io — "gate".
 EXCHANGES: dict[str, ExchangeConfig] = {
     "bybit":   ExchangeConfig("bybit",   "bybit",   0.10, 0.10, 0.000085, 1.0, 50),
-    "binance": ExchangeConfig("binance", "binance", 0.10, 0.10, 0.0005,   0.0, 1200),
-    "kucoin":  ExchangeConfig("kucoin",  "kucoin",  0.10, 0.10, 0.0,      0.0, 200),
-    "gateio":  ExchangeConfig("gateio",  "gate",    0.30, 0.30, 0.001,    1.0, 200),
-    "bitget":  ExchangeConfig("bitget",  "bitget",  0.10, 0.10, 0.0003,   1.0, 20),
-    "coinex":  ExchangeConfig("coinex",  "coinex",  0.20, 0.20, 0.0001,   1.0, 10),
+    "binance": ExchangeConfig("binance", "binance", 0.10, 0.10, 0.0005,   1.5, 1200),
+    "kucoin":  ExchangeConfig("kucoin",  "kucoin",  0.10, 0.10, 0.0,      1.5, 200),
+    "gateio":  ExchangeConfig("gateio",  "gate",    0.10, 0.10, 0.001,    1.0, 200),
+    "bitget":  ExchangeConfig("bitget",  "bitget",  0.10, 0.10, 0.0003,   1.5, 20),
+    "coinex":  ExchangeConfig("coinex",  "coinex",  0.20, 0.20, 0.0001,   1.7, 10),
     "bingx":   ExchangeConfig("bingx",   "bingx",   0.10, 0.10, 0.00035,  1.0, 24),
 }
 
