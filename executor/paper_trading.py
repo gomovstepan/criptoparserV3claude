@@ -76,6 +76,75 @@ class PaperTradingEngine:
         self.depth_max_age_ms = depth_max_age_ms
         self.kill_switch = False
 
+    # ── Гейты: каждый логирует свою причину скипа и инкрементит счётчик ──
+
+    @staticmethod
+    def _expired(opp: Opportunity, now_ms: int) -> bool:
+        """Гейт возраста: opportunity живёт ttl_seconds (сеется сканером, 5с).
+
+        Без него после простоя executor исполнил бы весь накопленный бэклог
+        по текущим ценам — покупая спред, которого давно нет.
+        """
+        age_ms = now_ms - opp.detected_at
+        if age_ms > opp.ttl_seconds * 1000:
+            _skip("expired", symbol=opp.symbol, buy_ex=opp.buy_exchange,
+                  sell_ex=opp.sell_exchange, age_ms=age_ms)
+            return True
+        return False
+
+    async def _in_cooldown(self, opp: Opportunity, cooldown_key: str, cooldown_ttl: int) -> bool:
+        """Кулдаун связки после убыточной оценки (0 — выключен)."""
+        if cooldown_ttl > 0 and await self._redis.get(cooldown_key):
+            _skip("cooldown", symbol=opp.symbol, buy_ex=opp.buy_exchange,
+                  sell_ex=opp.sell_exchange)
+            return True
+        return False
+
+    async def _fresh_depth(self, opp: Opportunity, now_ms: int) -> tuple[dict, dict] | None:
+        """Книги обеих ног, если обе свежи (порог depth_max_age_ms); иначе None.
+
+        Свежесть проверяется ДО ребаланса: комиссия вывода не должна
+        списываться ради возможности, которую отбраковывает мёртвый стакан.
+        """
+        raw_buy, raw_sell = await self._redis.mget([
+            depth_key(opp.buy_exchange, opp.symbol),
+            depth_key(opp.sell_exchange, opp.symbol),
+        ])
+        buy_depth, sell_depth = parse_depth(raw_buy), parse_depth(raw_sell)
+        if not is_fresh(buy_depth, now_ms, self.depth_max_age_ms) \
+                or not is_fresh(sell_depth, now_ms, self.depth_max_age_ms):
+            _skip("stale_depth", symbol=opp.symbol, buy_ex=opp.buy_exchange,
+                  sell_ex=opp.sell_exchange)
+            return None
+        return buy_depth, sell_depth
+
+    @staticmethod
+    def _build_trade(opp: Opportunity, amount: float, effective_buy: float,
+                     effective_sell: float, pnl, top_ask: float, top_bid: float,
+                     start: float) -> Trade:
+        now = int(time.time() * 1000)
+        return Trade(
+            id=f"trade_{now}_{uuid.uuid4().hex[:8]}",
+            opportunity_id=opp.id,
+            symbol=opp.symbol,
+            buy_exchange=opp.buy_exchange,
+            sell_exchange=opp.sell_exchange,
+            buy_price=effective_buy,
+            sell_price=effective_sell,
+            amount=amount,
+            buy_fee=pnl.buy_fee,
+            sell_fee=pnl.sell_fee,
+            withdrawal_fee=0.0,   # списывается один раз при ребалансе, не за сделку
+            slippage_cost=pnl.slippage_cost,
+            gross_pnl=pnl.gross_pnl,
+            net_pnl=pnl.net_pnl,
+            buy_top_ask=top_ask,
+            sell_top_bid=top_bid,
+            status="completed",
+            executed_at=now,
+            duration_ms=int((time.time() - start) * 1000),
+        )
+
     async def execute_opportunity(self, opp: Opportunity) -> ExecutionResult | None:
         """Симулировать сделку. None — kill switch, гейт или недостаточно средств.
 
@@ -90,36 +159,20 @@ class PaperTradingEngine:
         start = time.time()
         now_ms = int(time.time() * 1000)
 
-        # Гейт возраста: opportunity живёт ttl_seconds (сеется сканером, 5с).
-        # Без него после простоя executor исполнил бы весь накопленный бэклог
-        # по текущим ценам — покупая спред, которого давно нет.
-        age_ms = now_ms - opp.detected_at
-        if age_ms > opp.ttl_seconds * 1000:
-            _skip("expired", symbol=opp.symbol, buy_ex=opp.buy_exchange,
-                  sell_ex=opp.sell_exchange, age_ms=age_ms)
+        if self._expired(opp, now_ms):
             return None
 
         # ceil, не int(): настройка 0.5с при трункации давала 0 и МОЛЧА
         # выключала кулдаун целиком; любое положительное значение → мин. 1с.
         cooldown_ttl = math.ceil(self.loss_cooldown_sec)
         cooldown_key = f"cooldown:{opp.symbol}:{opp.buy_exchange}:{opp.sell_exchange}"
-        if cooldown_ttl > 0 and await self._redis.get(cooldown_key):
-            _skip("cooldown", symbol=opp.symbol, buy_ex=opp.buy_exchange,
-                  sell_ex=opp.sell_exchange)
+        if await self._in_cooldown(opp, cooldown_key, cooldown_ttl):
             return None
 
-        # Свежесть глубины проверяется ДО ребаланса: комиссия вывода не должна
-        # списываться ради возможности, которую тут же отбраковывает мёртвый стакан.
-        raw_buy, raw_sell = await self._redis.mget([
-            depth_key(opp.buy_exchange, opp.symbol),
-            depth_key(opp.sell_exchange, opp.symbol),
-        ])
-        buy_depth, sell_depth = parse_depth(raw_buy), parse_depth(raw_sell)
-        if not is_fresh(buy_depth, now_ms, self.depth_max_age_ms) \
-                or not is_fresh(sell_depth, now_ms, self.depth_max_age_ms):
-            _skip("stale_depth", symbol=opp.symbol, buy_ex=opp.buy_exchange,
-                  sell_ex=opp.sell_exchange)
+        depths = await self._fresh_depth(opp, now_ms)
+        if depths is None:
             return None
+        buy_depth, sell_depth = depths
 
         buy_balance = await get_balance(self._redis, opp.buy_exchange)
 
@@ -191,27 +244,8 @@ class PaperTradingEngine:
         new_buy = await update_balance(self._redis, opp.buy_exchange, buy_change)
         new_sell = await update_balance(self._redis, opp.sell_exchange, sell_change)
 
-        now = int(time.time() * 1000)
-        trade = Trade(
-            id=f"trade_{now}_{uuid.uuid4().hex[:8]}",
-            opportunity_id=opp.id,
-            symbol=opp.symbol,
-            buy_exchange=opp.buy_exchange,
-            sell_exchange=opp.sell_exchange,
-            buy_price=effective_buy,
-            sell_price=effective_sell,
-            amount=amount,
-            buy_fee=pnl.buy_fee,
-            sell_fee=pnl.sell_fee,
-            withdrawal_fee=0.0,   # списывается один раз при ребалансе, не за сделку
-            slippage_cost=pnl.slippage_cost,
-            gross_pnl=pnl.gross_pnl,
-            net_pnl=pnl.net_pnl,
-            buy_top_ask=top_ask,
-            sell_top_bid=top_bid,
-            status="completed",
-            executed_at=now,
-            duration_ms=int((time.time() - start) * 1000),
+        trade = self._build_trade(
+            opp, amount, effective_buy, effective_sell, pnl, top_ask, top_bid, start,
         )
         return ExecutionResult(
             trade=trade,

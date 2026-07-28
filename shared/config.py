@@ -100,10 +100,6 @@ EXCHANGES: dict[str, ExchangeConfig] = {
 }
 
 
-def get_exchange(name: str) -> ExchangeConfig:
-    """Вернуть конфиг биржи по системному имени (KeyError, если нет)."""
-    return EXCHANGES[name]
-
 
 # Единый экземпляр настроек для импорта в сервисы.
 settings = Settings()

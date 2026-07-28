@@ -8,6 +8,7 @@ GET /api/v1/analytics/pnl?days=N — агрегаты за период + дне
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 
 from auth import get_current_user
 from routers.pnl_sql import PNL_EVENTS
@@ -16,11 +17,34 @@ from shared.db import get_db_pool
 router = APIRouter(prefix="/api/v1", tags=["analytics"])
 
 
+class DailyPnl(BaseModel):
+    date: str
+    trades: int
+    net_pnl: float
+    gross_pnl: float
+    cumulative_net_pnl: float
+
+
+class AnalyticsPnl(BaseModel):
+    period: str
+    days: int
+    total_trades: int
+    winning_trades: int
+    win_rate: float
+    total_gross_pnl: float
+    total_net_pnl: float
+    avg_net_pnl: float
+    avg_trade_duration_ms: int
+    best_trade: float
+    worst_trade: float
+    daily: list[DailyPnl]
+
+
 @router.get("/analytics/pnl")
 async def analytics_pnl(
     days: int = Query(7, ge=1, le=365),
     _user: str = Depends(get_current_user),
-) -> dict:
+) -> AnalyticsPnl:
     pool = await get_db_pool()
 
     summary = await pool.fetchrow(

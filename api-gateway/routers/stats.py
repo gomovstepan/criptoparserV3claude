@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 
 from auth import get_current_user
 from routers.pnl_sql import PNL_EVENTS
@@ -14,8 +15,27 @@ from shared.db import get_db_pool
 router = APIRouter(prefix="/api/v1", tags=["stats"])
 
 
+class StatsKPI(BaseModel):
+    total_pnl: float
+    trades_today: int
+    pnl_today: float
+    active_opportunities: int
+    best_spread_pct: float
+
+
+class PnlPoint(BaseModel):
+    time: str
+    pnl: float
+    cumulative: float
+
+
+class PnlSeries(BaseModel):
+    hours: int
+    points: list[PnlPoint]
+
+
 @router.get("/stats")
-async def get_stats(_user: str = Depends(get_current_user)) -> dict:
+async def get_stats(_user: str = Depends(get_current_user)) -> StatsKPI:
     pool = await get_db_pool()
     row = await pool.fetchrow(
         """
@@ -47,7 +67,7 @@ async def get_stats(_user: str = Depends(get_current_user)) -> dict:
 async def get_pnl_series(
     hours: int = Query(24, ge=1, le=168),
     _user: str = Depends(get_current_user),
-) -> dict:
+) -> PnlSeries:
     pool = await get_db_pool()
     # Серия обязана считать P&L так же, как KPI выше: сделки + движения ребаланса
     # (см. routers/pnl_sql.py). Иначе последняя точка графика расходится с числом

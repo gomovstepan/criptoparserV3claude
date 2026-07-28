@@ -19,8 +19,45 @@ router = APIRouter(prefix="/api/v1", tags=["exchanges"])
 CONNECTED_THRESHOLD_SEC = 15
 
 
+class ExchangeItem(BaseModel):
+    exchange: str
+    is_active: bool
+    maker_fee_pct: float
+    taker_fee_pct: float
+    withdrawal_btc: float | None
+    withdrawal_usdt: float
+    rate_limit_req_per_sec: int
+
+
+class ExchangesList(BaseModel):
+    items: list[ExchangeItem]
+    total: int
+
+
+class ExchangeToggleResult(BaseModel):
+    exchange: str
+    is_active: bool
+
+
+class ExchangeStatusItem(BaseModel):
+    exchange: str
+    status: str
+    latency_ms: int | None
+    last_tick: str | None
+
+
+class ExchangeStatusList(BaseModel):
+    items: list[ExchangeStatusItem]
+
+
+class SettingsUpdateResult(BaseModel):
+    status: str
+    settings: dict[str, float]
+    not_found: list[str]
+
+
 @router.get("/exchanges")
-async def get_exchanges(_user: str = Depends(get_current_user)) -> dict:
+async def get_exchanges(_user: str = Depends(get_current_user)) -> ExchangesList:
     """Список бирж: is_active из БД, комиссии — из shared/config.py.
 
     Вся математика (scanner, executor) читает константы ``EXCHANGES``; колонки
@@ -62,7 +99,7 @@ async def update_exchange(
     exchange: str,
     payload: ExchangeUpdate,
     _user: str = Depends(get_current_user),
-) -> dict:
+) -> ExchangeToggleResult:
     """Включить/выключить биржу (toggle is_active).
 
     Меняет флаг в `exchange_configs`. Коллектор читает `is_active` при старте,
@@ -81,7 +118,7 @@ async def update_exchange(
 
 
 @router.get("/exchanges/status")
-async def get_exchange_status(_user: str = Depends(get_current_user)) -> dict:
+async def get_exchange_status(_user: str = Depends(get_current_user)) -> ExchangeStatusList:
     """Статус бирж по свежести последнего тика в TimescaleDB (для дашборда)."""
     pool = await get_db_pool()
     rows = await pool.fetch(
@@ -164,7 +201,7 @@ class SettingsUpdate(BaseModel):
 async def update_settings(
     payload: SettingsUpdate,
     _user: str = Depends(get_current_user),
-) -> dict:
+) -> SettingsUpdateResult:
     """Обновить настройки. Возвращает реально изменённые ключи, а не эхо запроса."""
     values = payload.model_dump(exclude_unset=True, exclude_none=True)
     pool = await get_db_pool()

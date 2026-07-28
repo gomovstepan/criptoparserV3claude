@@ -28,7 +28,7 @@ def depth_key(exchange: str, symbol: str) -> str:
     return f"depth:{exchange}:{symbol}"
 
 
-def dump_depth(bids: list, asks: list, ts: int, levels: int = DEPTH_LEVELS) -> str:
+def dump_depth(bids: list[list[float]], asks: list[list[float]], ts: int, levels: int = DEPTH_LEVELS) -> str:
     """JSON топ-``levels`` уровней для записи в Redis."""
     return json.dumps({
         "ts": ts,
@@ -50,11 +50,11 @@ def parse_depth(raw: str | None) -> dict | None:
         return None
 
 
-def is_fresh(depth: dict | None, now_ms: int, max_age_ms: int = DEPTH_MAX_AGE_MS) -> bool:
+def is_fresh(depth: dict | None, now_ms: int, max_age_ms: float = DEPTH_MAX_AGE_MS) -> bool:
     return depth is not None and (now_ms - depth["ts"]) <= max_age_ms
 
 
-def first_valid_price(levels: list) -> float | None:
+def first_valid_price(levels: list[list[float]]) -> float | None:
     """Цена первого валидного уровня (тот же фильтр, что в walk_*).
 
     Топ книги нельзя брать как ``levels[0][0]`` напрямую: NaN переживает
@@ -68,7 +68,7 @@ def first_valid_price(levels: list) -> float | None:
     return None
 
 
-def walk_asks_for_notional(asks: list, notional_usd: float) -> tuple[float, float] | None:
+def walk_asks_for_notional(asks: list[list[float]], notional_usd: float) -> tuple[float, float] | None:
     """Купить на ``notional_usd`` USDT, съедая asks снизу вверх.
 
     Возвращает (amount_base, vwap_price) или None, если глубины не хватает.
@@ -99,7 +99,7 @@ def walk_asks_for_notional(asks: list, notional_usd: float) -> tuple[float, floa
     return amount, notional_usd / amount
 
 
-def walk_bids_for_amount(bids: list, amount_base: float) -> float | None:
+def walk_bids_for_amount(bids: list[list[float]], amount_base: float) -> float | None:
     """Продать ``amount_base`` базового актива, съедая bids сверху вниз.
 
     Возвращает vwap_price или None, если глубины не хватает.

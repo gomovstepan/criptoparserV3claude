@@ -10,6 +10,7 @@ Health-эндпоинт показывает число WS-соединений,
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from contextlib import asynccontextmanager
 
@@ -101,53 +102,62 @@ async def _sync_pairs() -> None:
 
     active_exchanges = [r["exchange"] for r in ex_rows if r["exchange"] in EXCHANGES]
 
-    for ex_name in active_exchanges:
-        exchange = create_exchange(ex_name)
-        try:
-            await exchange.load_markets()
-            available = set(exchange.markets.keys())
+    # Биржи независимы (разные API, нет общего rate limit) — синхронизируем
+    # параллельно: последовательный обход только складывал их сетевые задержки.
+    await asyncio.gather(
+        *(_sync_exchange_pairs(pool, ex_name, desired) for ex_name in active_exchanges),
+        return_exceptions=True,
+    )
 
-            if desired:
-                valid_symbols = [s for s in desired if s in available]
-                if valid_symbols:
-                    await pool.executemany(
-                        """INSERT INTO tracked_pairs (symbol, exchange, is_active, priority)
-                           VALUES ($1, $2, true, 2)
-                           ON CONFLICT (symbol, exchange) DO UPDATE SET is_active = true""",
-                        [(sym, ex_name) for sym in valid_symbols],
-                    )
-                log.info(
-                    "sync_pairs_validated",
-                    exchange=ex_name,
-                    requested=len(desired),
-                    available=len(valid_symbols),
-                    skipped=len(desired) - len(valid_symbols),
+
+async def _sync_exchange_pairs(pool, ex_name: str, desired: list[str]) -> None:
+    """Синхронизировать tracked_pairs одной биржи (тело бывшего цикла _sync_pairs)."""
+    exchange = create_exchange(ex_name)
+    try:
+        await exchange.load_markets()
+        available = set(exchange.markets.keys())
+
+        if desired:
+            valid_symbols = [s for s in desired if s in available]
+            if valid_symbols:
+                await pool.executemany(
+                    """INSERT INTO tracked_pairs (symbol, exchange, is_active, priority)
+                       VALUES ($1, $2, true, 2)
+                       ON CONFLICT (symbol, exchange) DO UPDATE SET is_active = true""",
+                    [(sym, ex_name) for sym in valid_symbols],
                 )
-
-            # Деактивируем пары из БД, которых нет на бирже — главный фикс
-            # повторяющихся ws_error для ZEC/XMR/TON и т.п.
-            db_pairs = await pool.fetch(
-                "SELECT symbol FROM tracked_pairs WHERE exchange = $1 AND is_active = true",
-                ex_name,
+            log.info(
+                "sync_pairs_validated",
+                exchange=ex_name,
+                requested=len(desired),
+                available=len(valid_symbols),
+                skipped=len(desired) - len(valid_symbols),
             )
-            unknown = [r["symbol"] for r in db_pairs if r["symbol"] not in available]
-            if unknown:
-                await pool.execute(
-                    "UPDATE tracked_pairs SET is_active = false "
-                    "WHERE exchange = $1 AND symbol = ANY($2::text[])",
-                    ex_name, unknown,
-                )
-                log.info(
-                    "sync_pairs_deactivated",
-                    exchange=ex_name, symbols=unknown, count=len(unknown),
-                )
-        except Exception as err:
-            log.warning("sync_pairs_exchange_error", exchange=ex_name, error=str(err))
-        finally:
-            try:
-                await exchange.close()
-            except Exception:
-                pass
+
+        # Деактивируем пары из БД, которых нет на бирже — главный фикс
+        # повторяющихся ws_error для ZEC/XMR/TON и т.п.
+        db_pairs = await pool.fetch(
+            "SELECT symbol FROM tracked_pairs WHERE exchange = $1 AND is_active = true",
+            ex_name,
+        )
+        unknown = [r["symbol"] for r in db_pairs if r["symbol"] not in available]
+        if unknown:
+            await pool.execute(
+                "UPDATE tracked_pairs SET is_active = false "
+                "WHERE exchange = $1 AND symbol = ANY($2::text[])",
+                ex_name, unknown,
+            )
+            log.info(
+                "sync_pairs_deactivated",
+                exchange=ex_name, symbols=unknown, count=len(unknown),
+            )
+    except Exception as err:  # noqa: BLE001
+        log.warning("sync_pairs_exchange_error", exchange=ex_name, error=str(err))
+    finally:
+        try:
+            await exchange.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 @asynccontextmanager

@@ -99,8 +99,12 @@ async def cmd_status(message: Message) -> None:
 async def cmd_balance(message: Message) -> None:
     lines = ["💰 Виртуальный баланс (USDT):"]
     total = 0.0
+    # Один round-trip вместо HGET на биржу (N+1).
+    pipe = _deps.redis.pipeline()
     for exchange in EXCHANGES:
-        value = await _deps.redis.hget(f"balance:{exchange}", "USDT")
+        pipe.hget(f"balance:{exchange}", "USDT")
+    values = await pipe.execute()
+    for exchange, value in zip(EXCHANGES, values, strict=True):
         amount = float(value) if value is not None else 0.0
         total += amount
         lines.append(f"• {exchange}: {amount:,.2f}")

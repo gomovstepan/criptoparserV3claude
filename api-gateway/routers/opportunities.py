@@ -2,11 +2,33 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 
 from auth import get_current_user
+from routers.query_filters import build_filters
 from shared.db import get_db_pool
 
 router = APIRouter(prefix="/api/v1", tags=["opportunities"])
+
+
+class OpportunityOut(BaseModel):
+    id: str
+    symbol: str
+    buy_exchange: str
+    sell_exchange: str
+    buy_price: float
+    sell_price: float
+    gross_spread_pct: float
+    buy_fee_pct: float
+    sell_fee_pct: float
+    net_fees_pct: float
+    net_spread_pct: float
+    detected_at: str
+
+
+class OpportunitiesResponse(BaseModel):
+    items: list[OpportunityOut]
+    total: int
 
 
 @router.get("/opportunities")
@@ -14,12 +36,8 @@ async def get_opportunities(
     symbol: str | None = None,
     limit: int = Query(50, ge=1, le=500),
     _user: str = Depends(get_current_user),
-) -> dict:
-    clauses, params = [], []
-    if symbol:
-        params.append(symbol)
-        clauses.append(f"symbol = ${len(params)}")
-    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+) -> OpportunitiesResponse:
+    where, params = build_filters(symbol=symbol)
     params.append(limit)
 
     pool = await get_db_pool()

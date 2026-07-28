@@ -6,12 +6,50 @@ import io
 from math import ceil
 
 from fastapi import APIRouter, Depends, Query, Response
+from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from auth import get_current_user
+from routers.query_filters import build_filters as _build_filters
 from shared.db import get_db_pool
 
 router = APIRouter(prefix="/api/v1", tags=["trades"])
+
+
+class TradeOut(BaseModel):
+    """Строка сделки — зеркало ``_row_to_dict`` (и схема в OpenAPI)."""
+
+    id: str
+    opportunity_id: str
+    symbol: str
+    buy_exchange: str
+    sell_exchange: str
+    buy_price: float
+    sell_price: float
+    amount: float
+    buy_fee: float
+    sell_fee: float
+    slippage_cost: float
+    gross_pnl: float
+    net_pnl: float
+    buy_top_ask: float | None
+    sell_top_bid: float | None
+    status: str
+    executed_at: str
+    duration_ms: int | None
+
+
+class TradesPage(BaseModel):
+    items: list[TradeOut]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class TradesDeleteResult(BaseModel):
+    deleted: int
+    truncated: bool
 
 # Колонки, которые отдаём наружу (и в JSON, и в CSV). Разложение
 # gross → slippage → fees → net обязано доезжать до фронта целиком:
@@ -21,32 +59,6 @@ _COLUMNS = (
     "sell_price, amount, buy_fee, sell_fee, slippage_cost, gross_pnl, net_pnl, "
     "buy_top_ask, sell_top_bid, status, duration_ms"
 )
-
-
-def _build_filters(
-    status: str | None, symbol: str | None, exchange: str | None,
-    start: str | None, end: str | None,
-) -> tuple[str, list]:
-    """Собрать ``WHERE`` и параметры из фильтров (общая логика list/export)."""
-    clauses: list[str] = []
-    params: list = []
-    if status:
-        params.append(status)
-        clauses.append(f"status = ${len(params)}")
-    if symbol:
-        params.append(symbol)
-        clauses.append(f"symbol = ${len(params)}")
-    if exchange:
-        params.append(exchange)
-        clauses.append(f"(buy_exchange = ${len(params)} OR sell_exchange = ${len(params)})")
-    if start:
-        params.append(start)
-        clauses.append(f"time >= ${len(params)}::timestamptz")
-    if end:
-        params.append(end)
-        clauses.append(f"time <= ${len(params)}::timestamptz")
-    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    return where, params
 
 
 def _row_to_dict(r) -> dict:
@@ -83,7 +95,7 @@ async def get_trades(
     start: str | None = None,
     end: str | None = None,
     _user: str = Depends(get_current_user),
-) -> dict:
+) -> TradesPage:
     where, params = _build_filters(status, symbol, exchange, start, end)
 
     pool = await get_db_pool()
@@ -112,7 +124,7 @@ async def delete_trades(
     start: str | None = None,
     end: str | None = None,
     _user: str = Depends(get_current_user),
-) -> dict:
+) -> TradesDeleteResult:
     """Удалить сделки по фильтрам; без фильтров — TRUNCATE всей таблицы."""
     where, params = _build_filters(status, symbol, exchange, start, end)
     pool = await get_db_pool()

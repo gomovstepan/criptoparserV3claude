@@ -22,17 +22,38 @@ from shared.db import get_db_pool
 router = APIRouter(prefix="/api/v1", tags=["balance"])
 
 
+class BalanceItem(BaseModel):
+    exchange: str
+    asset: str
+    amount: float
+
+
+class BalanceList(BaseModel):
+    items: list[BalanceItem]
+    total: float
+
+
+class BalanceUpdateResult(BaseModel):
+    status: str
+    balances: dict[str, float]
+
+
 @router.get("/balance")
-async def get_balance(_user: str = Depends(get_current_user)) -> dict:
+async def get_balance(_user: str = Depends(get_current_user)) -> BalanceList:
     r = await get_redis()
-    items = []
+    # Один round-trip вместо HGET на биржу (N+1).
+    pipe = r.pipeline()
     for exchange in EXCHANGES:
-        value = await r.hget(f"balance:{exchange}", "USDT")
-        items.append({
+        pipe.hget(f"balance:{exchange}", "USDT")
+    values = await pipe.execute()
+    items = [
+        {
             "exchange": exchange,
             "asset": "USDT",
             "amount": float(value) if value is not None else 0.0,
-        })
+        }
+        for exchange, value in zip(EXCHANGES, values, strict=True)
+    ]
     return {"items": items, "total": round(sum(i["amount"] for i in items), 2)}
 
 
@@ -66,7 +87,7 @@ return prev
 async def set_balances(
     payload: BalanceUpdate,
     _user: str = Depends(get_current_user),
-) -> dict:
+) -> BalanceUpdateResult:
     if not settings.paper:
         raise HTTPException(status_code=403, detail="balances editable only in paper mode")
 

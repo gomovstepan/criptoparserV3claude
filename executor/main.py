@@ -56,11 +56,11 @@ _state: dict = {
 }
 
 
-def _D(value) -> Decimal:
+def _D(value: float | str | Decimal) -> Decimal:
     return Decimal(str(value))
 
 
-def _setting_float(raw, fallback: float) -> float:
+def _setting_float(raw: str | float | None, fallback: float) -> float:
     """JSONB-значение из settings (``"10.00"`` или ``10.0``) → float."""
     try:
         return float(str(raw).strip('"'))

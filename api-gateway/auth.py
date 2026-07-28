@@ -63,12 +63,12 @@ async def get_current_user(creds: HTTPAuthorizationCredentials = Depends(_bearer
     try:
         payload = decode_token(creds.credentials)
         return payload["sub"]
-    except jwt.PyJWTError:
+    except jwt.PyJWTError as err:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Недействительный или просроченный токен",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from err
 
 
 # ── Пользователь по умолчанию ─────────────────────────────────────────────
