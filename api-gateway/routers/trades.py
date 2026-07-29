@@ -5,12 +5,13 @@ import csv
 import io
 from math import ceil
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from auth import get_current_user
 from routers.query_filters import build_filters as _build_filters
+from shared.config import settings
 from shared.db import get_db_pool
 
 router = APIRouter(prefix="/api/v1", tags=["trades"])
@@ -126,6 +127,10 @@ async def delete_trades(
     _user: str = Depends(get_current_user),
 ) -> TradesDeleteResult:
     """Удалить сделки по фильтрам; без фильтров — TRUNCATE всей таблицы."""
+    # Зеркально PUT /balance: вне paper-режима trades — учётный документ,
+    # удаление ломает инвариант PNL_EVENTS (balance-строки и Redis остаются).
+    if not settings.paper:
+        raise HTTPException(status_code=403, detail="trades deletable only in paper mode")
     where, params = _build_filters(status, symbol, exchange, start, end)
     pool = await get_db_pool()
     if where:

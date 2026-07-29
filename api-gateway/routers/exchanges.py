@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from auth import get_current_user
-from shared.config import EXCHANGES
+from shared.config import EXCHANGES, settings
 from shared.db import get_db_pool
 
 log = structlog.get_logger()
@@ -204,6 +204,14 @@ async def update_settings(
 ) -> SettingsUpdateResult:
     """Обновить настройки. Возвращает реально изменённые ключи, а не эхо запроса."""
     values = payload.model_dump(exclude_unset=True, exclude_none=True)
+    # Отрицательный min_profit_usd — только paper-возможность (см. комментарий
+    # в SettingsUpdate). Вне paper гейт прибыльности ослаблять нельзя: это
+    # главный сейфти реальной торговли. Executor дополнительно клампит к нулю.
+    if not settings.paper and values.get("min_profit_usd", 0.0) < 0.0:
+        raise HTTPException(
+            status_code=422,
+            detail="min_profit_usd must be >= 0 outside paper mode",
+        )
     pool = await get_db_pool()
     updated: dict = {}
     for key, value in values.items():

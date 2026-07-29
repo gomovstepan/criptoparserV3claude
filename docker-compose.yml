@@ -49,13 +49,18 @@ services:
     image: redis:7-alpine
     container_name: arb-redis
     <<: *prod
+    # appendonly + noeviction: в Redis живут ДЕНЬГИ (balance:{ex}) и kill switch —
+    # прежняя allkeys-lru могла вытеснить взведённый стоп-кран, а рестарт без AOF
+    # терял балансы. Память ограничена по построению: prices/opportunities/trades
+    # capped maxlen, depth/dedup/cooldown — TTL-ключи; при переполнении записи
+    # начнут падать с ошибкой (fail-safe), а не молча выбрасывать состояние.
     command: >
       redis-server
       --requirepass ${REDIS_PASSWORD}
-      --appendonly no
+      --appendonly yes
       --save ""
       --maxmemory 400mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy noeviction
     volumes:
       - redis_data:/data
     healthcheck:
@@ -139,7 +144,11 @@ services:
     build: ./notifier
     container_name: arb-notifier
     <<: *prod
-    env_file: .env
+    # Telegram-токен вынесен в отдельный .env.notifier: его видит ТОЛЬКО notifier,
+    # остальные сервисы получают общий .env без секретов бота.
+    env_file:
+      - .env
+      - .env.notifier
     volumes:
       - ./shared:/app/shared:ro
       - ./logs:/app/logs

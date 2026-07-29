@@ -27,9 +27,9 @@ docker compose -f docker-compose.monitoring.yml up -d
 
 # Tests — run INSIDE the running containers (stdlib unittest, no pip needed, offline-safe)
 docker compose up -d
-pwsh tests/run-tests.ps1                  # all 6 suites; docker cp → python -m unittest → rm
+bash tests/run-tests.sh                   # all 6 suites; docker cp → python -m unittest → rm
 
-# One suite (what run-tests.ps1 does per case; container per suite is fixed):
+# One suite (what run-tests.sh does per case; container per suite is fixed):
 #   test_spread_calculator, test_depth      → arb-scanner
 #   test_pnl_calculator, test_paper_trading → arb-executor
 #   test_api, test_integration              → arb-api-gateway
@@ -88,9 +88,14 @@ drains the backlog.
   `min_net_spread_pct` (gross − both taker fees), `estimated_trade_notional`,
   `depth_max_age_ms_scanner`.
 - **executor** — cg `executor-cg`; paper trading, position = `max_position_pct%` of
-  buy-exchange balance; balances in Redis Hash `balance:{ex}` + hypertable. Kill switch is
-  Redis key `executor:kill_switch` ("1"/"0"), re-read **before every opportunity** (not once
-  per batch — that let a whole 100-message batch execute after the operator hit stop).
+  buy-exchange balance; balances in Redis Hash `balance:{ex}` + hypertable (on startup,
+  fields missing from Redis are restored from the last `balance` ledger row —
+  `restore_balances` — before the `INITIAL_BALANCES_USDT` seed). Kill switch is Redis key
+  `executor:kill_switch`, **fail-closed**: trading is allowed only on an explicit `"0"`
+  (`shared/redis_utils.py::kill_switch_engaged`); a missing key means STOP + a warning.
+  The executor seeds it at startup (`"0"` in paper, `"1"` otherwise) and re-reads it
+  **before every opportunity** (not once per batch — that let a whole 100-message batch
+  execute after the operator hit stop).
   Safety gates run in a fixed order BEFORE any state mutation: opportunity age
   (`detected_at` + `ttl_seconds`) → cooldown → depth freshness (`depth_max_age_ms_executor`,
   default 2s — stricter than the scanner) → balance/rebalance → notional → book walks →
@@ -112,19 +117,22 @@ drains the backlog.
   Thresholds re-read from `settings`.
 - **api-gateway** — REST `/api/v1/*`, WebSocket `/ws`, JWT HS256 (PyJWT) + PBKDF2 passwords,
   rate limiter 100/min/IP, CORS from `settings.cors_origins`. Routers in `routers/` subpackage.
-  `PUT /api/v1/balance` (paper-only, 403 otherwise) and `DELETE /api/v1/trades` (filtered
-  DELETE, or TRUNCATE with no filters) mutate state; `GET /api/v1/config` exposes `{paper}`
-  to the frontend.
+  `PUT /api/v1/balance` and `DELETE /api/v1/trades` (filtered DELETE, or TRUNCATE with no
+  filters) mutate state — both are paper-only (403 otherwise); `PUT /api/v1/settings`
+  additionally rejects a negative `min_profit_usd` outside paper (the executor clamps it
+  to ≥0 as a second line). `GET /api/v1/config` exposes `{paper}` to the frontend.
 
 `settings` table is the live control plane: scanner, notifier, and executor each run a
 ~10s refresher loop, so thresholds change from the UI without a rebuild. Values are JSONB
 and come back quoted — every reader does `float(str(row).strip('"'))` via a tolerant
 parse, so a bad value leaves the previous one in place instead of killing the service.
 
-The **kill switch is not in this table**. It is the Redis key `executor:kill_switch`
-("1"/"0"), written by the gateway and by `executor/rebalance.py`, re-read by the executor
-before every opportunity. The `settings.kill_switch` row is a vestigial seed that nothing
-reads or writes — do not wire anything to it.
+The **kill switch is not in this table**. It is the Redis key `executor:kill_switch`,
+written by the gateway, the Telegram bot (both write Redis directly), and
+`executor/rebalance.py`; re-read by the executor before every opportunity with
+**fail-closed** semantics (`kill_switch_engaged`: anything but `"0"` — including a
+missing key — means STOP). The `settings.kill_switch` row is a vestigial seed that
+nothing reads or writes — do not wire anything to it.
 
 Three legacy keys stay seeded in the table but are exposed by **neither the UI nor the API
 allowlist**: `slippage_tolerance_pct`, `execution_timeout_sec` (superseded — slippage now
@@ -211,8 +219,14 @@ Loki keeps 7 days. Tune via `LOG_DIR` / `LOG_LEVEL` env.
 - **`notifier/tg_queue.py` must not be named `queue.py`** — cwd is first on `sys.path`, so
   `queue.py` would shadow the stdlib `queue` module.
 - **Cross-service communication is via Redis, not HTTP.** The kill switch in particular is a
-  shared Redis key; gateway and executor never call each other over HTTP (avoids DNS issues).
-  The only HTTP hop is the Telegram bot calling service `/health` and executor `/killswitch`.
+  shared Redis key written directly by gateway and Telegram bot; services never call each
+  other's mutating endpoints (executor `POST /killswitch` and notifier `POST /notify` were
+  removed as unauthenticated surfaces). The only HTTP hop is the Telegram bot polling
+  service `/health` endpoints (read-only).
+- **Redis holds money and the kill switch — its config is deliberately strict**:
+  `--appendonly yes --maxmemory-policy noeviction` (docker-compose). Never revert to an
+  eviction policy that can drop `balance:{ex}` or `executor:kill_switch`; memory stays
+  bounded because streams are capped (maxlen) and depth/dedup/cooldown keys carry TTLs.
 - **Collector WS strategy is per-exchange, not uniform.** Exchanges with
   `watchOrderBookForSymbols` (binance/bybit/kucoin/bitget/coinex) get one multiplexed socket;
   bybit is further chunked to 10 symbols per subscribe (it silently ignores larger ones and
@@ -246,20 +260,22 @@ Loki keeps 7 days. Tune via `LOG_DIR` / `LOG_LEVEL` env.
 - **Theme tokens** are CSS RGB-channel vars in `index.css` (`:root`=dark, `html.light`=light);
   tailwind colors use `rgb(var(--c-x) / <alpha-value>)`. recharts internal colors are not themed.
 - Tests are plain `unittest.TestCase` files run with `python -m unittest` inside containers
-  (pytest is not installed in images). Keep new tests stdlib-only so `run-tests.ps1` works offline.
+  (pytest is not installed in images). Keep new tests stdlib-only so `run-tests.sh` works offline.
   `test_api`/`test_integration` need the live stack; they hit `localhost:8000` and real Redis
   from inside `arb-api-gateway`. `test_paper_trading` stubs Redis with a plain class, so the
   engine can be tested without a live stack — follow that pattern for new executor tests.
-- **`.env` is tracked by git** despite being listed in `.gitignore` (it was committed before
-  the rule existed, and `.gitignore` does not untrack existing files). It currently carries a
-  real Telegram bot token while the DB/Redis/JWT values are still the `.env.example`
-  placeholders. Do not put new secrets there until it is untracked.
+- **Secrets layout**: `.env` is untracked (removed from git index; the old Telegram token
+  in git history is considered compromised — rotate via BotFather). DB/Redis/JWT/Grafana
+  values are random per-deployment secrets. Telegram credentials live in a separate
+  untracked `.env.notifier` (template: `.env.notifier.example`) which only the notifier
+  service receives via compose `env_file` — other containers never see the bot token.
 
 ## Environment notes
 
-Windows dev machine. Docker Desktop is often not running at session start — `docker compose
-up -d` first. A VPN tunnel (`happ-tun`) intermittently breaks DNS: `files.pythonhosted.org`
-won't resolve (so avoid editing `requirements.txt` — keep pip layers cached for offline
-rebuilds), and exchange WS hosts may be unreachable (exchanges show "disconnected" — a real
-network state, not a bug). On Windows, Vite's file-watcher misses NEW files — restart the dev
-server (don't just reload) when adding pages/components.
+Target environment is a Linux VPS running the Docker stack (Windows is at most an optional
+dev machine — do not add Windows-specific tooling). Network access to exchanges may be
+degraded or filtered depending on the host's region/route: unresolvable pip hosts mean
+`requirements.txt` edits should be avoided when offline (keep pip layers cached), and
+exchange WS hosts being unreachable shows as "disconnected" — a real network state, not a
+bug. Before real trading, the network path VPS→exchanges must be direct (no consumer VPN
+in the data path).

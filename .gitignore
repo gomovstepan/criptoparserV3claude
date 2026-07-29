@@ -40,3 +40,4 @@ Thumbs.db
 logs/*
 !logs/.gitkeep
 graphify-out/*
+.env.notifier

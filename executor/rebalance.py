@@ -17,10 +17,10 @@ import structlog
 
 from balance import all_balances, update_balance
 from shared.config import EXCHANGES
+# Реэкспорт сохраняется: tests/test_paper_trading.py импортирует константу отсюда.
+from shared.redis_utils import KILL_SWITCH_KEY  # noqa: F401
 
 log = structlog.get_logger()
-
-KILL_SWITCH_KEY = "executor:kill_switch"
 
 
 @dataclass

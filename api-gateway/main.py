@@ -34,13 +34,22 @@ log = structlog.get_logger()
 _requests_counter = Counter("http_requests_total", "Всего HTTP-запросов", ["path"])
 _ws_clients_gauge = Gauge("ws_clients_active", "Активные WebSocket-клиенты")
 
+MIN_JWT_SECRET_LEN = 32
+
 _state: dict = {"redis": None, "tasks": []}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if not settings.jwt_secret or "change_me" in settings.jwt_secret:
-        raise RuntimeError("JWT_SECRET is not configured — set a secure value in .env")
+    # Плейсхолдеры из .env.example начинаются с "your_" ("your_jwt_secret_..."),
+    # прежняя проверка ловила только "change_me" — стек стартовал с публично
+    # известным секретом. Требуем осмысленную длину и отсутствие шаблонов.
+    secret = settings.jwt_secret or ""
+    if len(secret) < MIN_JWT_SECRET_LEN or "change_me" in secret or secret.startswith("your_"):
+        raise RuntimeError(
+            "JWT_SECRET is not configured — "
+            f"set a random value >= {MIN_JWT_SECRET_LEN} chars in .env"
+        )
     pool = await get_db_pool()
     await ensure_default_user(pool)
     _state["redis"] = await get_redis()

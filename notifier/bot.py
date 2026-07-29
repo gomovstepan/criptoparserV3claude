@@ -16,6 +16,7 @@ from aiogram.types import Message
 
 from shared.config import EXCHANGES, settings
 from shared.models import Trade
+from shared.redis_utils import KILL_SWITCH_KEY, kill_switch_engaged
 
 log = structlog.get_logger()
 router = Router()
@@ -43,15 +44,14 @@ router.message.filter(_authorized)
 
 TRADES_STREAM = "trades"
 
-# Адреса сервисов внутри docker-сети
+# Адреса сервисов внутри docker-сети (только read-only /health —
+# единственный HTTP-hop между сервисами; мутации идут через Redis)
 SERVICE_URLS = {
     "collector": "http://collector:8001/health",
     "scanner": "http://scanner:8002/health",
     "executor": "http://executor:8003/health",
     "api-gateway": "http://api-gateway:8000/health",
 }
-EXECUTOR_KILLSWITCH_URL = "http://executor:8003/killswitch"
-KILL_SWITCH_KEY = "executor:kill_switch"
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=4)
 MAX_TRADES_LIMIT = 50  # /trades N: потолок, как у REST-пагинации (le=100)
 
@@ -133,24 +133,21 @@ async def cmd_trades(message: Message) -> None:
 
 @router.message(Command("killswitch"))
 async def cmd_killswitch(message: Message) -> None:
-    """Переключить kill switch.
+    """Переключить kill switch записью Redis-ключа (как api-gateway).
 
-    Раньше команда слала запрос без поля ``active``, а на стороне executor'а оно
-    по умолчанию ``True`` — то есть торговлю можно было только остановить, но не
-    возобновить. Текущее состояние читаем из того же ключа Redis, что и executor,
-    и посылаем противоположное.
+    HTTP-вызов executor'а удалён вместе с его неаутентифицированным
+    POST /killswitch: executor перечитывает ключ перед каждой возможностью,
+    поэтому запись в Redis применяется так же быстро (≤1 с). Чтение —
+    fail-closed: отсутствие ключа трактуется как «остановлено».
     """
     try:
-        current = (await _deps.redis.get(KILL_SWITCH_KEY)) == "1"
-        async with _deps.http.post(
-            EXECUTOR_KILLSWITCH_URL,
-            json={"reason": "telegram", "active": not current},
-            timeout=HTTP_TIMEOUT,
-        ) as resp:
-            data = await resp.json()
-        active = data.get("kill_switch_active")
+        current = kill_switch_engaged(await _deps.redis.get(KILL_SWITCH_KEY))
+        active = not current
+        await _deps.redis.set(KILL_SWITCH_KEY, "1" if active else "0")
+        log.warning("kill_switch_changed", active=active, reason="telegram")
         icon = "🛑" if active else "✅"
+        status = "activated" if active else "deactivated"
         state = "торговля остановлена" if active else "торговля возобновлена"
-        await message.answer(f"{icon} Kill switch: {data.get('status')} — {state}")
+        await message.answer(f"{icon} Kill switch: {status} — {state}")
     except Exception as err:  # noqa: BLE001
-        await message.answer(f"❌ Не удалось вызвать killswitch: {err}")
+        await message.answer(f"❌ Не удалось переключить killswitch: {err}")

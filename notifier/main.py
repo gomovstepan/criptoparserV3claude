@@ -17,7 +17,6 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from fastapi import FastAPI, Response
 from prometheus_client import CONTENT_TYPE_LATEST, Gauge, generate_latest
-from pydantic import BaseModel
 
 import bot as bot_module
 from formatter import format_opportunity, format_trade
@@ -200,15 +199,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=f"{SERVICE} service", lifespan=lifespan)
 
 
-class NotifyRequest(BaseModel):
-    type: str = "test"
-    message: str
-
-
-@app.post("/notify")
-async def notify(req: NotifyRequest) -> dict:
-    message_id = await _state["queue"].enqueue(f"🔔 {req.message}")
-    return {"status": "queued", "message_id": message_id}
+# POST /notify удалён сознательно: неаутентифицированный эндпоинт, доступный
+# любому контейнеру сети, позволял слать произвольные сообщения в операторский
+# Telegram; в системе его никто не вызывал.
 
 
 @app.get("/health")

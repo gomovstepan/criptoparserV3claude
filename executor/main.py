@@ -3,7 +3,9 @@
 Читает opportunities из Redis Stream ``opportunities`` (consumer group
 ``executor-cg``), симулирует сделки, пишет их в hypertable ``trades`` и Redis
 Stream ``trades``, обновляет виртуальные балансы (Redis Hash + hypertable
-``balance``). Kill switch (``POST /killswitch``) останавливает торговлю.
+``balance``). Kill switch — Redis-ключ ``executor:kill_switch`` (fail-closed:
+торговля разрешена только при явном "0"); переключается через api-gateway
+``POST /api/v1/killswitch`` или Telegram-бота — оба пишут ключ напрямую.
 """
 from __future__ import annotations
 
@@ -16,15 +18,14 @@ import redis.asyncio as redis
 import structlog
 from fastapi import FastAPI, Response
 from prometheus_client import CONTENT_TYPE_LATEST, Gauge, generate_latest
-from pydantic import BaseModel
 
-from balance import all_balances, init_balances
+from balance import all_balances, has_any_balance, init_balances, restore_balances
 from paper_trading import ExecutionResult, PaperTradingEngine
 from shared.config import settings
 from shared.db import close_db_pool, get_db_pool
 from shared.logging_config import setup_logging
 from shared.models import Opportunity
-from shared.redis_utils import wait_until_ready
+from shared.redis_utils import KILL_SWITCH_KEY, kill_switch_engaged, wait_until_ready
 
 SERVICE = "executor"
 setup_logging(SERVICE)
@@ -35,7 +36,6 @@ TRADES_STREAM = "trades"
 GROUP = "executor-cg"
 CONSUMER = "executor-1"
 TRADES_MAXLEN = 10_000
-KILL_SWITCH_KEY = "executor:kill_switch"
 SETTINGS_REFRESH_SEC = 10
 
 _TRADE_COLUMNS = [
@@ -53,7 +53,26 @@ _state: dict = {
     "redis": None, "pool": None, "engine": None,
     "trades_executed": 0, "loop_errors": 0,
     "task": None, "refresher": None, "running": False,
+    "ks_missing_warned": False,
 }
+
+
+async def _read_kill_switch(r: redis.Redis) -> bool:
+    """Прочитать kill switch с fail-closed семантикой (нет ключа = СТОП).
+
+    Пропажа ключа — не штатное состояние (сидится в lifespan): это eviction,
+    FLUSH или пустой Redis. Предупреждаем один раз на эпизод, а не на каждое
+    сообщение батча, иначе устойчиво отсутствующий ключ зафлудил бы лог.
+    """
+    raw = await r.get(KILL_SWITCH_KEY)
+    if raw is None:
+        if not _state["ks_missing_warned"]:
+            _state["ks_missing_warned"] = True
+            log.warning("kill_switch_key_missing_fail_closed",
+                        hint="executor:kill_switch отсутствует в Redis — торговля остановлена")
+    else:
+        _state["ks_missing_warned"] = False
+    return kill_switch_engaged(raw)
 
 
 def _D(value: float | str | Decimal) -> Decimal:
@@ -86,7 +105,14 @@ async def _apply_engine_settings(engine: PaperTradingEngine) -> None:
     )
     for row in rows:
         attr = _ENGINE_SETTINGS[row["key"]]
-        setattr(engine, attr, _setting_float(row["value"], getattr(engine, attr)))
+        value = _setting_float(row["value"], getattr(engine, attr))
+        # Отрицательный min_profit_usd — сознательная paper-возможность
+        # (наблюдать поток сделок с мелкими минусами). Вне paper гейт
+        # прибыльности не ослабляется: кламп к нулю, даже если в БД минус
+        # (вторая линия обороны после валидации в API-gateway).
+        if attr == "min_profit_usd" and not settings.paper:
+            value = max(0.0, value)
+        setattr(engine, attr, value)
 
 
 async def _refresh_settings() -> None:
@@ -220,7 +246,7 @@ async def _consume_loop() -> None:
                     # Kill switch перечитывается ПЕРЕД каждой возможностью, а не раз
                     # на батч: иначе после переключения из дашборда успевал исполниться
                     # весь уже вычитанный батч — до 100 сделок после «Остановить».
-                    engine.kill_switch = (await r.get(KILL_SWITCH_KEY)) == "1"
+                    engine.kill_switch = await _read_kill_switch(r)
                     if engine.kill_switch:
                         continue
                     try:
@@ -273,16 +299,34 @@ async def lifespan(app: FastAPI):
     pool = await get_db_pool()
     _state["redis"], _state["pool"] = r, pool
 
+    # Сначала восстановление из ledger (Redis мог потерять ключи), затем сид
+    # начальных значений для бирж, которых нет ни в Redis, ни в ledger.
+    try:
+        await restore_balances(r, pool)
+    except Exception as err:  # noqa: BLE001
+        if await has_any_balance(r):
+            log.error("balance_restore_failed", error=str(err))
+        else:
+            # Redis пуст, а ledger недоступен: init_balances ниже засеял бы
+            # СТАРТОВЫЙ капитал поверх реальной истории, молча исказив P&L.
+            # Как и при невозможном ребалансе — взводим kill switch: пусть
+            # оператор разберётся и снимет стоп вручную.
+            await r.set(KILL_SWITCH_KEY, "1")
+            log.error("balance_restore_failed_kill_switch", error=str(err))
     await init_balances(r)
     await _seed_initial_balance_history(pool)
     await _ensure_group(r)
+
+    # Сид kill switch: fail-closed чтение требует явного значения. В paper —
+    # "0" (торговля идёт, как раньше); вне paper — "1" (стоп до явного снятия).
+    await r.setnx(KILL_SWITCH_KEY, "0" if settings.paper else "1")
 
     engine = PaperTradingEngine(r)
     try:
         await _apply_engine_settings(engine)
     except Exception as err:  # noqa: BLE001
         log.warning("engine_settings_load_failed", error=str(err))
-    engine.kill_switch = (await r.get(KILL_SWITCH_KEY)) == "1"
+    engine.kill_switch = await _read_kill_switch(r)
     _state["engine"] = engine
 
     if settings.paper:
@@ -312,23 +356,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=f"{SERVICE} service", lifespan=lifespan)
 
 
-class KillSwitchRequest(BaseModel):
-    reason: str = "manual"
-    active: bool = True
-
-
-@app.post("/killswitch")
-async def killswitch(req: KillSwitchRequest) -> dict:
-    engine: PaperTradingEngine = _state["engine"]
-    engine.kill_switch = req.active
-    await _state["redis"].set(KILL_SWITCH_KEY, "1" if req.active else "0")
-    log.warning("kill_switch_changed", active=req.active, reason=req.reason)
-    return {
-        "status": "activated" if req.active else "deactivated",
-        "reason": req.reason,
-        "timestamp": datetime.now(tz=timezone.utc).isoformat(),
-        "kill_switch_active": req.active,
-    }
+# POST /killswitch удалён сознательно: он был неаутентифицирован и доступен
+# любому контейнеру сети. Переключение — запись Redis-ключа KILL_SWITCH_KEY
+# (api-gateway POST /api/v1/killswitch под JWT, Telegram-бот напрямую);
+# цикл перечитывает ключ перед каждой возможностью (≤1 c).
 
 
 @app.get("/health")
