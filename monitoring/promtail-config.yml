@@ -1,0 +1,40 @@
+# Promtail — читает JSON-логи микросервисов из смонтированного ./logs и шлёт в Loki.
+# Имя файла (<service>.log) даёт лейбл service; из JSON достаём level и timestamp.
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: criptoparser-services
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: criptoparser
+          __path__: /var/log/criptoparser/*.log
+
+    pipeline_stages:
+      # Имя сервиса — из имени файла (collector.log → collector).
+      - match:
+          selector: '{job="criptoparser"}'
+          stages:
+            - regex:
+                source: filename
+                expression: '/var/log/criptoparser/(?P<service>[^/]+)\.log'
+            - labels:
+                service:
+      # Парсим JSON-строку structlog: вытаскиваем level и timestamp.
+      - json:
+          expressions:
+            level: level
+            ts: timestamp
+      - labels:
+          level:
+      - timestamp:
+          source: ts
+          format: RFC3339Nano

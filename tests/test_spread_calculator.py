@@ -66,6 +66,47 @@ class TestSpreadCalculator(unittest.TestCase):
         opps = calculate_spreads("BTC/USDT", prices, min_spread_pct=0.1)
         self.assertEqual(opps, [])
 
+    def test_depth_prunes_phantom_spread(self):
+        # top-of-book даёт 2% спред, но глубины на $1000 недостаточно
+        prices = {
+            "binance": {"bid": 100.0, "ask": 100.0},
+            "kucoin":  {"bid": 102.0, "ask": 102.0},
+        }
+        depth = {
+            "binance": {"ts": 0, "bids": [[100.0, 10.0]], "asks": [[100.0, 1.0]]},
+            "kucoin":  {"ts": 0, "bids": [[102.0, 10.0]], "asks": [[102.0, 10.0]]},
+        }
+        opps = calculate_spreads(
+            "BTC/USDT", prices, min_spread_pct=1.0,
+            estimated_notional_usd=1000.0, depth=depth,
+        )
+        self.assertEqual(opps, [])
+
+    def test_depth_produces_vwap_prices(self):
+        prices = {
+            "binance": {"bid": 100.0, "ask": 100.0},
+            "kucoin":  {"bid": 102.0, "ask": 102.0},
+        }
+        # Глубины хватает, но часть объёма исполняется по худшим уровням:
+        # binance asks: 8@100 + 100@101; kucoin bids: 8@102 + 100@101.5
+        # $1000: 8@100=$800, 200/101≈1.980 base → amount≈9.980, vwap_buy≈100.198
+        # sell 9.980: 8@102 + 1.980@101.5 → vwap_sell≈101.90 → gross≈1.7% < 2%
+        depth = {
+            "binance": {"ts": 0, "bids": [[100.0, 100.0]],
+                         "asks": [[100.0, 8.0], [101.0, 100.0]]},
+            "kucoin":  {"ts": 0, "bids": [[102.0, 8.0], [101.5, 100.0]],
+                         "asks": [[102.0, 100.0]]},
+        }
+        opps = calculate_spreads(
+            "BTC/USDT", prices, min_spread_pct=0.0,
+            estimated_notional_usd=1000.0, depth=depth,
+        )
+        buy = next(o for o in opps if o.buy_exchange == "binance" and o.sell_exchange == "kucoin")
+        self.assertGreater(buy.buy_price, 100.0)
+        self.assertLess(buy.sell_price, 102.0)
+        self.assertLess(buy.gross_spread_pct, 2.0)
+        self.assertGreater(buy.gross_spread_pct, 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

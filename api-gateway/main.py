@@ -21,13 +21,15 @@ from rate_limiter import rest_limiter
 from redis_client import close_redis, get_redis
 from routers import auth as auth_router
 from routers import (
-    analytics, balance, exchanges, killswitch, opportunities, prices, stats, trades,
+    analytics, balance, config, exchanges, killswitch, opportunities, prices, stats, trades,
 )
 from shared.config import settings
 from shared.db import close_db_pool, get_db_pool
+from shared.logging_config import setup_logging
 
-log = structlog.get_logger()
 SERVICE = "api-gateway"
+setup_logging(SERVICE)
+log = structlog.get_logger()
 
 _requests_counter = Counter("http_requests_total", "Всего HTTP-запросов", ["path"])
 _ws_clients_gauge = Gauge("ws_clients_active", "Активные WebSocket-клиенты")
@@ -97,7 +99,7 @@ async def rate_limit_middleware(request: Request, call_next):
 
 for r in (auth_router.router, prices.router, opportunities.router,
           trades.router, balance.router, exchanges.router, stats.router,
-          analytics.router, killswitch.router):
+          analytics.router, killswitch.router, config.router):
     app.include_router(r)
 app.include_router(ws_module.router)
 

@@ -1,0 +1,81 @@
+# Стек мониторинга и логов для крипто-арбитражной системы.
+# Подключается к внешней сети arbitrage-net, поднятой основным compose-файлом.
+#
+# Запуск (после `docker compose up -d`):
+#   docker compose -f docker-compose.monitoring.yml up -d
+#
+# UI:
+#   Prometheus — http://localhost:9090
+#   Grafana    — http://localhost:3000 (admin / ${GRAFANA_PASSWORD:-admin})
+#   Loki API   — http://localhost:3100
+
+x-prod-defaults: &prod
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: arb-prometheus
+    <<: *prod
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks: [arbitrage-net]
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: arb-grafana
+    <<: *prod
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana-dashboard.json:/var/lib/grafana/dashboards/criptoparser.json:ro
+      - ./monitoring/grafana-logs-dashboard.json:/var/lib/grafana/dashboards/criptoparser-logs.json:ro
+      - grafana_data:/var/lib/grafana
+    depends_on: [prometheus, loki]
+    networks: [arbitrage-net]
+
+  # ── Логи: Loki (хранилище) + Promtail (сбор из ./logs) ────────────────────
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: arb-loki
+    <<: *prod
+    command: -config.file=/etc/loki/loki-config.yml
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    networks: [arbitrage-net]
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: arb-promtail
+    <<: *prod
+    command: -config.file=/etc/promtail/promtail-config.yml
+    volumes:
+      - ./monitoring/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - ./logs:/var/log/criptoparser:ro
+    depends_on: [loki]
+    networks: [arbitrage-net]
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+
+networks:
+  arbitrage-net:
+    name: arbitrage-net
+    external: true

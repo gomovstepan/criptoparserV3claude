@@ -23,10 +23,13 @@ from balance import all_balances, init_balances
 from paper_trading import ExecutionResult, PaperTradingEngine
 from shared.config import settings
 from shared.db import close_db_pool, get_db_pool
+from shared.logging_config import setup_logging
 from shared.models import Opportunity
+from shared.redis_utils import wait_until_ready
 
-log = structlog.get_logger()
 SERVICE = "executor"
+setup_logging(SERVICE)
+log = structlog.get_logger()
 
 OPPORTUNITIES_STREAM = "opportunities"
 TRADES_STREAM = "trades"
@@ -98,6 +101,14 @@ async def _persist(results: list[ExecutionResult]) -> None:
             balance_records.append(
                 (executed, exchange, "USDT", _D(new_balance), t.id, _D(change), "trade")
             )
+        if res.rebalance:
+            rb = res.rebalance
+            balance_records.append(
+                (executed, rb.donor, "USDT", _D(rb.donor_new_balance), None, _D(-rb.gross_amount), "rebalance")
+            )
+            balance_records.append(
+                (executed, rb.receiver, "USDT", _D(rb.receiver_new_balance), None, _D(rb.net_amount), "rebalance")
+            )
     if trade_records:
         await pool.copy_records_to_table("trades", records=trade_records, columns=_TRADE_COLUMNS)
     if balance_records:
@@ -143,7 +154,7 @@ async def _consume_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     r = redis.from_url(settings.redis_url, decode_responses=True)
-    await r.ping()
+    await wait_until_ready(r)
     pool = await get_db_pool()
     _state["redis"], _state["pool"] = r, pool
 
@@ -152,13 +163,25 @@ async def lifespan(app: FastAPI):
     await _ensure_group(r)
 
     max_pos = await pool.fetchval("SELECT value FROM settings WHERE key='max_position_pct'")
-    engine = PaperTradingEngine(r, max_position_pct=float(str(max_pos).strip('"')) if max_pos else 10.0)
+    reb_thresh = await pool.fetchval("SELECT value FROM settings WHERE key='rebalance_threshold_usd'")
+    engine = PaperTradingEngine(
+        r,
+        max_position_pct=float(str(max_pos).strip('"')) if max_pos else 10.0,
+        rebalance_threshold=float(str(reb_thresh).strip('"')) if reb_thresh else 100.0,
+    )
     engine.kill_switch = (await r.get(KILL_SWITCH_KEY)) == "1"
     _state["engine"] = engine
 
-    _state["running"] = True
-    _state["task"] = asyncio.create_task(_consume_loop(), name="executor_loop")
-    log.info("executor_up", max_position_pct=engine.max_position_pct, kill_switch=engine.kill_switch)
+    if settings.paper:
+        _state["running"] = True
+        _state["task"] = asyncio.create_task(_consume_loop(), name="executor_loop")
+        log.info("executor_up", mode="paper",
+                 max_position_pct=engine.max_position_pct, kill_switch=engine.kill_switch)
+    else:
+        # Реальная торговля не реализована: executor не подписывается на opportunities.
+        # Балансы и kill switch остаются доступны, но сделки не создаются.
+        log.warning("executor_idle", mode="real",
+                    reason="real trading not implemented; set PAPER=true to enable simulation")
     try:
         yield
     finally:
@@ -203,12 +226,17 @@ async def health() -> dict:
             "SELECT count(*) AS n, COALESCE(sum(net_pnl), 0) AS pnl "
             "FROM trades WHERE time >= date_trunc('day', now())"
         )
-        trades_today, total_pnl = int(row["n"]), float(row["pnl"])
+        reb_fee = await pool.fetchval(
+            "SELECT COALESCE(sum(change_amount), 0) FROM balance "
+            "WHERE reason = 'rebalance' AND time >= date_trunc('day', now())"
+        )
+        trades_today, total_pnl = int(row["n"]), float(row["pnl"]) + float(reb_fee)
     except Exception:  # noqa: BLE001
         pass
     return {
         "status": "healthy",
         "service": SERVICE,
+        "paper": settings.paper,
         "trades_today": trades_today,
         "total_pnl_today": round(total_pnl, 2),
         "kill_switch_active": engine.kill_switch if engine else False,

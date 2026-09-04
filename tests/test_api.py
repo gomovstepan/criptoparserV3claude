@@ -66,6 +66,45 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(data["status"], "healthy")
 
+    # ── /api/v1/config (режим paper для фронтенда) ──
+    def test_config_requires_auth(self):
+        status, _ = _req("GET", "/api/v1/config")
+        self.assertEqual(status, 401)
+
+    def test_config_returns_paper_flag(self):
+        status, data = _req("GET", "/api/v1/config", token=self.token)
+        self.assertEqual(status, 200)
+        self.assertIn("paper", data)
+        self.assertIsInstance(data["paper"], bool)
+
+    # ── PUT /api/v1/balance (редактирование балансов в paper-режиме) ──
+    # Тесты НЕдеструктивны: проверяют только auth и валидацию, которая
+    # срабатывает ДО записи в Redis/БД, поэтому балансы не меняются.
+    def test_put_balance_requires_auth(self):
+        status, _ = _req("PUT", "/api/v1/balance", body={"balances": {"binance": 1.0}})
+        self.assertEqual(status, 401)
+
+    def test_put_balance_rejects_unknown_exchange(self):
+        # 400 в paper-режиме (unknown ловится до мутации) либо 403, если paper=false.
+        status, _ = _req("PUT", "/api/v1/balance",
+                         token=self.token, body={"balances": {"nosuchexchange": 1.0}})
+        self.assertIn(status, (400, 403))
+
+    def test_put_balance_rejects_negative(self):
+        status, _ = _req("PUT", "/api/v1/balance",
+                         token=self.token, body={"balances": {"binance": -5.0}})
+        self.assertIn(status, (400, 403))
+
+    def test_put_balance_rejects_empty(self):
+        status, _ = _req("PUT", "/api/v1/balance", token=self.token, body={"balances": {}})
+        # min_length=1 ⇒ 422 от pydantic (или 403, если paper=false).
+        self.assertIn(status, (403, 422))
+
+    # ── DELETE /api/v1/trades ── только проверка auth (деструктивно при успехе).
+    def test_delete_trades_requires_auth(self):
+        status, _ = _req("DELETE", "/api/v1/trades")
+        self.assertEqual(status, 401)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,7 +15,12 @@ import unittest
 
 import redis
 
-R = redis.Redis(host=os.environ.get("REDIS_HOST", "redis"), port=6379, decode_responses=True)
+R = redis.Redis(
+    host=os.environ.get("REDIS_HOST", "redis"),
+    port=int(os.environ.get("REDIS_PORT", "6379")),
+    password=os.environ.get("REDIS_PASSWORD") or None,
+    decode_responses=True,
+)
 SYMBOL = "ZZZ/USDT"  # синтетическая пара, которой нет в реальном потоке — изолирует тест
 
 

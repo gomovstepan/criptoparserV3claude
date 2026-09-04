@@ -19,9 +19,13 @@ async def get_stats(_user: str = Depends(get_current_user)) -> dict:
     row = await pool.fetchrow(
         """
         SELECT
-          (SELECT COALESCE(sum(net_pnl), 0) FROM trades)                                        AS total_pnl,
+          (SELECT COALESCE(sum(net_pnl), 0) FROM trades)
+            + (SELECT COALESCE(sum(change_amount), 0) FROM balance WHERE reason = 'rebalance')
+            AS total_pnl,
           (SELECT count(*) FROM trades WHERE time >= date_trunc('day', now()))                  AS trades_today,
-          (SELECT COALESCE(sum(net_pnl), 0) FROM trades WHERE time >= date_trunc('day', now()))  AS pnl_today,
+          (SELECT COALESCE(sum(net_pnl), 0) FROM trades WHERE time >= date_trunc('day', now()))
+            + (SELECT COALESCE(sum(change_amount), 0) FROM balance WHERE reason = 'rebalance' AND time >= date_trunc('day', now()))
+            AS pnl_today,
           (SELECT count(*) FROM opportunities WHERE time > now() - interval '5 minutes')         AS active_opportunities,
           (SELECT COALESCE(max(net_spread_pct), 0) FROM opportunities WHERE time > now() - interval '1 hour') AS best_spread
         """

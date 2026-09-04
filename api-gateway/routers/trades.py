@@ -94,6 +94,29 @@ async def get_trades(
     }
 
 
+@router.delete("/trades")
+async def delete_trades(
+    status: str | None = None,
+    symbol: str | None = None,
+    exchange: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    _user: str = Depends(get_current_user),
+) -> dict:
+    """Удалить сделки по фильтрам; без фильтров — TRUNCATE всей таблицы."""
+    where, params = _build_filters(status, symbol, exchange, start, end)
+    pool = await get_db_pool()
+    if where:
+        status_str = await pool.execute(f"DELETE FROM trades {where}", *params)
+        # asyncpg возвращает "DELETE N"
+        deleted = int(status_str.split()[-1]) if status_str else 0
+        return {"deleted": deleted, "truncated": False}
+
+    total = await pool.fetchval("SELECT count(*) FROM trades")
+    await pool.execute("TRUNCATE TABLE trades")
+    return {"deleted": int(total or 0), "truncated": True}
+
+
 @router.get("/trades/export")
 async def export_trades(
     status: str | None = None,

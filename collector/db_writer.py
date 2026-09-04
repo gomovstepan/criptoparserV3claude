@@ -21,10 +21,18 @@ log = structlog.get_logger()
 PRICES_STREAM = "prices"
 GROUP = "writer-cg"
 CONSUMER = "writer-1"
-BATCH_SIZE = 100
+# BATCH_SIZE 1000 даёт ~10× throughput vs 100 за счёт амортизации
+# round-trip к Postgres. При темпе 100+ tick/sec и стриме на 100k
+# меньшие пачки приводили к хроническому отставанию writer'а.
+BATCH_SIZE = 1000
 BLOCK_MS = 1000  # максимум 1 секунда ожидания пачки
 
 _COLUMNS = ["time", "exchange", "symbol", "bid", "ask", "bid_volume", "ask_volume", "latency_ms"]
+
+# Цены остаются NUMERIC(18,8) — реальная spot-цена не превышает 10^10.
+# Объёмы в БД мигрированы на NUMERIC(28,8) (см. migrate-volume-precision.sql).
+_PRICE_MAX = Decimal("9999999999.99999999")               # NUMERIC(18,8)
+_VOLUME_MAX = Decimal("99999999999999999999.99999999")    # NUMERIC(28,8)
 
 
 class BatchWriter:
@@ -77,28 +85,86 @@ class BatchWriter:
             if record is not None:
                 records.append(record)
         if records:
-            await self._pool.copy_records_to_table("prices", records=records, columns=_COLUMNS)
-            self.rows_written += len(records)
+            try:
+                await self._pool.copy_records_to_table(
+                    "prices", records=records, columns=_COLUMNS,
+                )
+                self.rows_written += len(records)
+            except Exception as err:  # noqa: BLE001
+                # Один невалидный record (overflow / check constraint) валит
+                # весь COPY — fallback на построчный INSERT, чтобы не терять
+                # остальную пачку. Плохие записи логируются и пропускаются.
+                log.warning("db_writer_batch_failed", error=str(err), batch_size=len(records))
+                await self._insert_individually(records)
         if ids:
             await self._redis.xack(PRICES_STREAM, GROUP, *ids)
 
+    async def _insert_individually(self, records: list[tuple]) -> None:
+        """Fallback после провала COPY: INSERT по одной строке."""
+        sql = (
+            "INSERT INTO prices (time, exchange, symbol, bid, ask, "
+            "bid_volume, ask_volume, latency_ms) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
+        )
+        ok = 0
+        for rec in records:
+            try:
+                await self._pool.execute(sql, *rec)
+                ok += 1
+            except Exception as err:  # noqa: BLE001
+                log.warning(
+                    "price_record_rejected",
+                    exchange=rec[1], symbol=rec[2],
+                    bid=str(rec[3]), ask=str(rec[4]),
+                    bid_volume=str(rec[5]) if rec[5] is not None else None,
+                    ask_volume=str(rec[6]) if rec[6] is not None else None,
+                    error=str(err),
+                )
+        self.rows_written += ok
+
     @staticmethod
     def _to_record(f: dict) -> tuple | None:
-        """Преобразовать поля stream'а в кортеж для COPY (numeric → Decimal)."""
+        """Преобразовать поля stream'а в кортеж для COPY (numeric → Decimal).
+
+        Отсекает записи с явным переполнением precision БД, чтобы не валить
+        весь batch. Цены сверяются с NUMERIC(18,8), объёмы — с NUMERIC(28,8).
+        """
         try:
             ts = datetime.fromtimestamp(int(f["received_at"]) / 1000, tz=timezone.utc)
-            return (
-                ts,
-                f["exchange"],
-                f["symbol"],
-                Decimal(f["bid"]),
-                Decimal(f["ask"]),
-                Decimal(f["bid_volume"]) if f.get("bid_volume") else None,
-                Decimal(f["ask_volume"]) if f.get("ask_volume") else None,
-                int(f["latency_ms"]) if f.get("latency_ms") else None,
-            )
+            bid = Decimal(f["bid"])
+            ask = Decimal(f["ask"])
+            bid_volume = Decimal(f["bid_volume"]) if f.get("bid_volume") else None
+            ask_volume = Decimal(f["ask_volume"]) if f.get("ask_volume") else None
         except (KeyError, ValueError, InvalidOperation):
             return None
+
+        if abs(bid) > _PRICE_MAX or abs(ask) > _PRICE_MAX:
+            log.warning(
+                "price_overflow_skipped",
+                exchange=f.get("exchange"), symbol=f.get("symbol"),
+                bid=str(bid), ask=str(ask),
+            )
+            return None
+        if bid_volume is not None and abs(bid_volume) > _VOLUME_MAX:
+            bid_volume = None
+        if ask_volume is not None and abs(ask_volume) > _VOLUME_MAX:
+            ask_volume = None
+
+        try:
+            latency_ms = int(f["latency_ms"]) if f.get("latency_ms") else None
+        except (ValueError, TypeError):
+            latency_ms = None
+
+        return (
+            ts,
+            f["exchange"],
+            f["symbol"],
+            bid,
+            ask,
+            bid_volume,
+            ask_volume,
+            latency_ms,
+        )
 
     async def stop(self) -> None:
         self._running = False

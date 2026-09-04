@@ -25,10 +25,13 @@ from formatter import format_opportunity, format_trade
 from tg_queue import TelegramQueue
 from shared.config import settings
 from shared.db import close_db_pool, get_db_pool
+from shared.logging_config import setup_logging
 from shared.models import Opportunity, Trade
+from shared.redis_utils import wait_until_ready
 
-log = structlog.get_logger()
 SERVICE = "notifier"
+setup_logging(SERVICE)
+log = structlog.get_logger()
 
 OPPORTUNITIES_STREAM = "opportunities"
 TRADES_STREAM = "trades"
@@ -138,7 +141,7 @@ async def _handle_entry(stream_name: str, fields: dict, queue: TelegramQueue) ->
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     r = redis.from_url(settings.redis_url, decode_responses=True)
-    await r.ping()
+    await wait_until_ready(r)
     _state["redis"] = r
     _state["pool"] = await get_db_pool()
     _state["http"] = aiohttp.ClientSession()
